@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +28,8 @@ from .batch_processor import BatchProcessor
 from .config import load_settings, save_settings
 from .form_filler import PDFFormFiller
 from .models import BatchJobConfig, PlacementSettings
+from .stamp_utils import get_stamp_page_size
+from .utils import pt_to_mm
 
 
 class MainWindow(QMainWindow):
@@ -37,7 +40,7 @@ class MainWindow(QMainWindow):
 
         self.settings = load_settings()
         self.form_filler = PDFFormFiller()
-        self.form_inputs: Dict[str, QLineEdit] = {}
+        self.form_inputs: Dict[str, QWidget] = {}
 
         self.template_pdf_path: Path | None = None
         self.filled_stamp_pdf_path: Path | None = None
@@ -145,6 +148,27 @@ class MainWindow(QMainWindow):
         btn_run = QPushButton("Stapelverarbeitung starten")
         btn_run.clicked.connect(self.run_batch)
 
+        step_label = self._label_with_info(
+            "Raster-Schritt",
+            "Abstand zwischen geprüften Kandidat-Positionen. Kleiner = genauer, aber langsamer.",
+        )
+        dpi_label = self._label_with_info(
+            "Render-DPI",
+            "Auflösung für die Seitendarstellung zur Freiflächenanalyse. Höher = präziser, aber langsamer/speicherintensiver.",
+        )
+        scale_label = self._label_with_info(
+            "Min. Skalierung",
+            "Wenn kein Platz gefunden wird, wird der Stempel schrittweise bis zu diesem Faktor verkleinert.",
+        )
+        occ_label = self._label_with_info(
+            "Max. Belegungsquote",
+            "Maximal erlaubter Anteil belegter Pixel im Zielrechteck. Kleiner = strenger bei Überlappungen.",
+        )
+        dilation_label = self._label_with_info(
+            "Dilation",
+            "Erweitert erkannte belegte Bereiche um Sicherheitsabstand (in Pixeln). Höher = konservativer.",
+        )
+
         layout.addWidget(QLabel("Eingabeordner"), 0, 0)
         layout.addWidget(self.input_dir_edit, 0, 1)
         layout.addWidget(btn_input, 0, 2)
@@ -158,22 +182,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Stempelhöhe"), 2, 2)
         layout.addWidget(self.stamp_height_spin, 2, 3)
 
-        layout.addWidget(QLabel("Raster-Schritt"), 3, 0)
+        layout.addWidget(step_label, 3, 0)
         layout.addWidget(self.grid_step_spin, 3, 1)
         layout.addWidget(QLabel("Seitenrand"), 3, 2)
         layout.addWidget(self.margin_spin, 3, 3)
 
-        layout.addWidget(QLabel("Render-DPI"), 4, 0)
+        layout.addWidget(dpi_label, 4, 0)
         layout.addWidget(self.dpi_spin, 4, 1)
         layout.addWidget(QLabel("Weiß-Schwelle"), 4, 2)
         layout.addWidget(self.threshold_spin, 4, 3)
 
-        layout.addWidget(QLabel("Max. Belegungsquote"), 5, 0)
+        layout.addWidget(occ_label, 5, 0)
         layout.addWidget(self.max_occ_spin, 5, 1)
-        layout.addWidget(QLabel("Dilation"), 5, 2)
+        layout.addWidget(dilation_label, 5, 2)
         layout.addWidget(self.dilation_spin, 5, 3)
 
-        layout.addWidget(QLabel("Min. Skalierung"), 6, 0)
+        layout.addWidget(scale_label, 6, 0)
         layout.addWidget(self.scale_down_spin, 6, 1)
         layout.addWidget(QLabel("Seitenmodus"), 6, 2)
         layout.addWidget(self.mode_combo, 6, 3)
@@ -246,9 +270,17 @@ class MainWindow(QMainWindow):
         for field in fields:
             name = field["name"]
             label = field["label"]
-            edit = QLineEdit(str(field.get("value", "")))
-            self.fields_form.addRow(f"{label} ({name})", edit)
-            self.form_inputs[name] = edit
+            is_multiline = bool(field.get("is_multiline"))
+            if is_multiline:
+                edit = QTextEdit()
+                edit.setFixedHeight(64)
+                edit.setPlainText(str(field.get("value", "")))
+                self.fields_form.addRow(f"{label} ({name})", edit)
+                self.form_inputs[name] = edit
+            else:
+                edit = QLineEdit(str(field.get("value", "")))
+                self.fields_form.addRow(f"{label} ({name})", edit)
+                self.form_inputs[name] = edit
 
         self.log(f"{len(fields)} Formularfelder geladen.")
 
@@ -266,7 +298,7 @@ class MainWindow(QMainWindow):
         if not target_file:
             return
 
-        field_values = {name: edit.text() for name, edit in self.form_inputs.items()}
+        field_values = {name: self._read_field_value(widget) for name, widget in self.form_inputs.items()}
         try:
             self.form_filler.fill_form(self.template_pdf_path, Path(target_file), field_values)
         except Exception as exc:
@@ -275,6 +307,7 @@ class MainWindow(QMainWindow):
 
         self.filled_stamp_pdf_path = Path(target_file)
         self.stamp_output_label.setText(f"Stempel-PDF: {target_file}")
+        self._apply_stamp_size_defaults(self.filled_stamp_pdf_path)
         self.log(f"Stempel-PDF erzeugt: {target_file}")
 
     def select_input_dir(self) -> None:
@@ -313,19 +346,65 @@ class MainWindow(QMainWindow):
             return
 
         success_count = 0
+        reduced_count = 0
+        no_position_count = 0
         for file_result in results:
             if file_result.success:
                 success_count += 1
                 self.log(f"OK: {file_result.input_file.name} -> {file_result.output_file}")
                 for pr in file_result.page_results:
+                    if pr.status == "no_position":
+                        no_position_count += 1
+                    if pr.scale < 0.999:
+                        reduced_count += 1
                     self.log(
                         f"  Seite {pr.page_index + 1}: {pr.status}, scale={pr.scale:.2f}, occ={pr.occupancy_ratio:.4f}, rect={pr.rect}"
                     )
             else:
                 self.log(f"FEHLER: {file_result.input_file.name}: {file_result.error}")
 
+        self.log(
+            "Zusammenfassung: "
+            f"{success_count}/{len(results)} Dateien erfolgreich, "
+            f"{no_position_count} Seiten ohne freie Position, "
+            f"{reduced_count} Platzierungen mit Skalierungsreduktion."
+        )
         self.log(f"Fertig. {success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
         QMessageBox.information(self, "Fertig", f"{success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
 
     def log(self, message: str) -> None:
         self.log_edit.append(message)
+
+    def _read_field_value(self, widget: QWidget) -> str:
+        if isinstance(widget, QTextEdit):
+            return widget.toPlainText()
+        if isinstance(widget, QLineEdit):
+            return widget.text()
+        return ""
+
+    def _apply_stamp_size_defaults(self, stamp_pdf: Path) -> None:
+        try:
+            width_pt, height_pt = get_stamp_page_size(stamp_pdf)
+        except Exception as exc:
+            self.log(f"Hinweis: Stempelgröße konnte nicht aus Datei gelesen werden ({exc}).")
+            return
+
+        width_mm = pt_to_mm(width_pt)
+        height_mm = pt_to_mm(height_pt)
+        self.stamp_width_spin.setValue(width_mm)
+        self.stamp_height_spin.setValue(height_mm)
+        self.log(f"Standardgröße aus Stempel-PDF übernommen: {width_mm:.1f} x {height_mm:.1f} mm")
+
+    def _label_with_info(self, text: str, info: str) -> QWidget:
+        wrap = QWidget()
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(QLabel(text))
+        button = QToolButton()
+        button.setText("i")
+        button.setToolTip("Info")
+        button.clicked.connect(lambda: QMessageBox.information(self, text, info))
+        row.addWidget(button)
+        row.addStretch(1)
+        return wrap

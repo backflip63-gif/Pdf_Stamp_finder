@@ -5,6 +5,8 @@ from typing import Dict, List
 
 import fitz
 
+PDF_FIELD_FLAG_MULTILINE = 1 << 12
+
 
 class FormFillerError(RuntimeError):
     pass
@@ -28,6 +30,7 @@ class PDFFormFiller:
                             "label": widget.field_label or widget.field_name,
                             "value": widget.field_value or "",
                             "type": str(widget.field_type),
+                            "is_multiline": bool((getattr(widget, "field_flags", 0) or 0) & PDF_FIELD_FLAG_MULTILINE),
                         }
                     )
             return fields
@@ -44,7 +47,11 @@ class PDFFormFiller:
                     continue
                 for widget in widgets:
                     if widget.field_name in field_values:
-                        widget.field_value = field_values[widget.field_name]
+                        value = field_values[widget.field_name].replace("\r\n", "\n").replace("\r", "\n")
+                        if "\n" in value:
+                            flags = getattr(widget, "field_flags", 0) or 0
+                            widget.field_flags = flags | PDF_FIELD_FLAG_MULTILINE
+                        widget.field_value = value
                         widget.update()
                         found_names.add(widget.field_name)
 
@@ -59,15 +66,13 @@ class PDFFormFiller:
             doc.close()
 
         out = fitz.open("pdf", temp_bytes)
+        flattened = fitz.open()
         try:
-            for page in out:
-                widgets = page.widgets()
-                if widgets:
-                    for widget in widgets:
-                        try:
-                            page.delete_widget(widget)
-                        except Exception:
-                            pass
-            out.save(output_pdf, garbage=4, deflate=True)
+            for page_index in range(len(out)):
+                src_page = out[page_index]
+                dst_page = flattened.new_page(width=src_page.rect.width, height=src_page.rect.height)
+                dst_page.show_pdf_page(dst_page.rect, out, page_index, overlay=True)
+            flattened.save(output_pdf, garbage=4, deflate=True)
         finally:
+            flattened.close()
             out.close()
