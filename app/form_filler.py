@@ -22,12 +22,15 @@ class PDFFormFiller:
                 widgets = page.widgets()
                 if not widgets:
                     continue
-                for widget in widgets:
+                for widget_index, widget in enumerate(widgets):
+                    field_name = widget.field_name or ""
+                    field_id = f"{page_index}:{widget_index}:{field_name}"
                     fields.append(
                         {
+                            "id": field_id,
                             "page": page_index,
-                            "name": widget.field_name,
-                            "label": widget.field_label or widget.field_name,
+                            "name": field_name,
+                            "label": widget.field_label or field_name or f"Feld {len(fields) + 1}",
                             "value": widget.field_value or "",
                             "type": str(widget.field_type),
                             "is_multiline": bool((getattr(widget, "field_flags", 0) or 0) & PDF_FIELD_FLAG_MULTILINE),
@@ -45,17 +48,24 @@ class PDFFormFiller:
                 widgets = page.widgets()
                 if not widgets:
                     continue
-                for widget in widgets:
-                    if widget.field_name in field_values:
-                        value = field_values[widget.field_name].replace("\r\n", "\n").replace("\r", "\n")
+                for widget_index, widget in enumerate(widgets):
+                    field_name = widget.field_name or ""
+                    field_id = f"{page.number}:{widget_index}:{field_name}"
+                    value_raw = field_values.get(field_id)
+                    if value_raw is None and field_name:
+                        value_raw = field_values.get(field_name)
+                    if value_raw is not None:
+                        value = value_raw.replace("\r\n", "\n").replace("\r", "\n")
                         if "\n" in value:
                             flags = getattr(widget, "field_flags", 0) or 0
                             widget.field_flags = flags | PDF_FIELD_FLAG_MULTILINE
                         widget.field_value = value
                         widget.update()
-                        found_names.add(widget.field_name)
+                        found_names.add(field_id)
+                        if field_name:
+                            found_names.add(field_name)
 
-            missing = set(field_values.keys()) - found_names
+            missing = {k for k in field_values.keys() if k not in found_names}
             if missing:
                 raise FormFillerError(f"Formularfelder nicht gefunden: {', '.join(sorted(missing))}")
 

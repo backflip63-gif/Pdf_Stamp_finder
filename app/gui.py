@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 from typing import Dict
 
 from PySide6.QtWidgets import (
@@ -31,7 +32,7 @@ from .config import load_settings, save_settings
 from .form_filler import PDFFormFiller
 from .models import BatchJobConfig, PlacementSettings
 from .stamp_utils import get_stamp_page_size
-from .utils import pt_to_mm
+from .utils import ensure_dir, pt_to_mm
 
 
 class MainWindow(QMainWindow):
@@ -274,6 +275,7 @@ class MainWindow(QMainWindow):
             return
 
         for field in fields:
+            field_id = str(field.get("id") or field["name"])
             name = field["name"]
             label = field["label"]
             is_multiline = bool(field.get("is_multiline"))
@@ -282,11 +284,11 @@ class MainWindow(QMainWindow):
                 edit.setFixedHeight(64)
                 edit.setPlainText(str(field.get("value", "")))
                 self.fields_form.addRow(f"{label} ({name})", edit)
-                self.form_inputs[name] = edit
+                self.form_inputs[field_id] = edit
             else:
                 edit = QLineEdit(str(field.get("value", "")))
                 self.fields_form.addRow(f"{label} ({name})", edit)
-                self.form_inputs[name] = edit
+                self.form_inputs[field_id] = edit
 
         self.log(f"{len(fields)} Formularfelder geladen.")
 
@@ -300,19 +302,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Hinweis", "Bitte zuerst ein Formular-PDF auswählen.")
             return
 
-        target_file, _ = QFileDialog.getSaveFileName(self, "Stempel-PDF speichern", "stempel_filled.pdf", "PDF (*.pdf)")
-        if not target_file:
-            return
+        target_file = self._temp_stamp_output_path()
 
         field_values = {name: self._read_field_value(widget) for name, widget in self.form_inputs.items()}
         try:
-            self.form_filler.fill_form(self.template_pdf_path, Path(target_file), field_values)
+            self.form_filler.fill_form(self.template_pdf_path, target_file, field_values, flatten=True)
         except Exception as exc:
             QMessageBox.critical(self, "Fehler", f"Stempel-PDF konnte nicht erzeugt werden:\n{exc}")
             return
 
-        self.filled_stamp_pdf_path = Path(target_file)
-        self.stamp_output_label.setText(f"Stempel-PDF: {target_file}")
+        self.filled_stamp_pdf_path = target_file
+        self.stamp_output_label.setText(f"Stempel-PDF (temp): {target_file}")
         self._apply_stamp_size_defaults(self.filled_stamp_pdf_path)
         self.log(f"Stempel-PDF erzeugt: {target_file}")
 
@@ -330,8 +330,10 @@ class MainWindow(QMainWindow):
 
     def run_batch(self) -> None:
         if self.filled_stamp_pdf_path is None:
-            QMessageBox.warning(self, "Hinweis", "Bitte zuerst ein Stempel-PDF erzeugen.")
-            return
+            self.generate_stamp_pdf()
+            if self.filled_stamp_pdf_path is None:
+                QMessageBox.warning(self, "Hinweis", "Stempel-PDF konnte nicht automatisch erzeugt werden.")
+                return
         if self.input_dir_path is None or self.output_dir_path is None:
             QMessageBox.warning(self, "Hinweis", "Bitte Eingabe- und Ausgabeordner wählen.")
             return
@@ -424,3 +426,8 @@ class MainWindow(QMainWindow):
         status = "OK" if getattr(file_result, "success", False) else "FEHLER"
         self.log(f"Fortschritt: {done}/{total} ({percentage} %) - {status} - {pdf_path.name}")
         QApplication.processEvents()
+
+    def _temp_stamp_output_path(self) -> Path:
+        temp_root = Path(tempfile.gettempdir()) / "pdf_stamper"
+        ensure_dir(temp_root)
+        return temp_root / "stamp_filled.pdf"
