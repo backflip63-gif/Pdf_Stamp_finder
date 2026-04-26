@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict
 
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QScrollArea,
     QSpinBox,
     QTextEdit,
@@ -212,6 +214,10 @@ class MainWindow(QMainWindow):
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         layout.addWidget(self.log_edit)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
         return group
 
     def _load_settings_into_ui(self) -> None:
@@ -340,9 +346,11 @@ class MainWindow(QMainWindow):
         processor = BatchProcessor(config)
 
         self.log("Stapelverarbeitung gestartet...")
-        results = processor.process_all()
+        self.progress_bar.setValue(0)
+        results = processor.process_all(progress_callback=self._on_batch_progress)
         if not results:
             self.log("Keine PDF-Dateien im Eingabeordner gefunden.")
+            self.progress_bar.setValue(0)
             return
 
         success_count = 0
@@ -370,6 +378,7 @@ class MainWindow(QMainWindow):
             f"{reduced_count} Platzierungen mit Skalierungsreduktion."
         )
         self.log(f"Fertig. {success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
+        self.progress_bar.setValue(100)
         QMessageBox.information(self, "Fertig", f"{success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
 
     def log(self, message: str) -> None:
@@ -408,3 +417,10 @@ class MainWindow(QMainWindow):
         row.addWidget(button)
         row.addStretch(1)
         return wrap
+
+    def _on_batch_progress(self, done: int, total: int, pdf_path: Path, file_result: object) -> None:
+        percentage = int((done / total) * 100) if total else 0
+        self.progress_bar.setValue(percentage)
+        status = "OK" if getattr(file_result, "success", False) else "FEHLER"
+        self.log(f"Fortschritt: {done}/{total} ({percentage} %) - {status} - {pdf_path.name}")
+        QApplication.processEvents()

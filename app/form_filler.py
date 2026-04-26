@@ -66,14 +66,7 @@ class PDFFormFiller:
             doc.close()
 
         out = fitz.open("pdf", temp_bytes)
-        flattened = fitz.open()
         try:
-            for page_index in range(len(out)):
-                src_page = out[page_index]
-                dst_page = flattened.new_page(width=src_page.rect.width, height=src_page.rect.height)
-                pix = src_page.get_pixmap(dpi=300, alpha=False)
-                dst_page.insert_image(dst_page.rect, pixmap=pix, keep_proportion=False, overlay=True)
-            flattened.save(output_pdf, garbage=4, deflate=True)
+            out.save(output_pdf, garbage=4, deflate=True)
         finally:
-            flattened.close()
             out.close()

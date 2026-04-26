@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, List
+from typing import Callable, Iterable, List
 
 import fitz
 
@@ -27,9 +27,17 @@ class BatchProcessor:
             if path.is_file():
                 yield path
 
-    def process_all(self) -> List[FileProcessResult]:
+    def process_all(self, progress_callback: Callable[[int, int, Path, FileProcessResult], None] | None = None) -> List[FileProcessResult]:
         ensure_dir(self.config.output_dir)
-        return [self.process_file(pdf_path) for pdf_path in self.iter_input_pdfs()]
+        pdfs = list(self.iter_input_pdfs())
+        total = len(pdfs)
+        results: List[FileProcessResult] = []
+        for index, pdf_path in enumerate(pdfs, start=1):
+            file_result = self.process_file(pdf_path)
+            results.append(file_result)
+            if progress_callback:
+                progress_callback(index, total, pdf_path, file_result)
+        return results
 
     def process_file(self, pdf_path: Path) -> FileProcessResult:
         output_file = build_output_path(pdf_path, self.config.output_dir, self.config.output_suffix)
