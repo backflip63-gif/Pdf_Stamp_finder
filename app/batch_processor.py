@@ -46,6 +46,7 @@ class BatchProcessor:
         try:
             stamp_doc = fitz.open(self.config.stamp_pdf)
             stamp_src_w, stamp_src_h = get_stamp_page_size(self.config.stamp_pdf)
+            stamp_source = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
 
             # Gewünschte Zielgröße ist konfigurierbar. Wenn 0, nimm Originalgröße.
             target_w = mm_to_pt(self.config.settings.stamp_width_mm) if self.config.settings.stamp_width_mm > 0 else stamp_src_w
@@ -77,7 +78,7 @@ class BatchProcessor:
                         )
                         continue
 
-                    place_stamp_pdf(page, stamp_doc, cand.rect)
+                    place_stamp_pdf(page, stamp_source, cand.rect)
                     result.page_results.append(
                         PlacementResult(
                             page_index=page_index,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Tuple
 
 import fitz
 
@@ -21,10 +21,10 @@ def get_stamp_page_size(stamp_pdf: Path) -> Tuple[float, float]:
         doc.close()
 
 
-def place_stamp_pdf(page: fitz.Page, stamp_doc: fitz.Document, rect: fitz.Rect) -> None:
+def place_stamp_pdf(page: fitz.Page, stamp_source: Any, rect: fitz.Rect) -> None:
     # Stempel explizit als PDF-Annotation anlegen (nicht einbetten).
-    _ = stamp_doc  # aktuell nur für API-Kompatibilität / zukünftige Erweiterung
-    annot = page.add_stamp_annot(rect)
+    # Für ein benutzerdefiniertes Aussehen wird ein Bild/Pixmap als Appearance verwendet.
+    annot = page.add_stamp_annot(rect, stamp=stamp_source)
     annot.set_info(
         title="PDF-Stamper",
         content="Stempel wurde automatisch platziert.",
