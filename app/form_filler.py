@@ -37,7 +37,7 @@ class PDFFormFiller:
         finally:
             doc.close()
 
-    def fill_form(self, template_pdf: Path, output_pdf: Path, field_values: Dict[str, str]) -> None:
+    def fill_form(self, template_pdf: Path, output_pdf: Path, field_values: Dict[str, str], flatten: bool = True) -> None:
         doc = fitz.open(template_pdf)
         try:
             found_names: set[str] = set()
@@ -67,6 +67,16 @@ class PDFFormFiller:
 
         out = fitz.open("pdf", temp_bytes)
         try:
+            if flatten:
+                for page in out:
+                    widgets = page.widgets()
+                    if not widgets:
+                        continue
+                    for widget in widgets:
+                        try:
+                            page.delete_widget(widget)
+                        except Exception:
+                            continue
             out.save(output_pdf, garbage=4, deflate=True)
         finally:
             out.close()

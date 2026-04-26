@@ -22,12 +22,11 @@ def get_stamp_page_size(stamp_pdf: Path) -> Tuple[float, float]:
 
 
 def place_stamp_pdf(page: fitz.Page, stamp_doc: fitz.Document, rect: fitz.Rect) -> None:
-    # Vektorbasierte Platzierung für maximale Qualität
-    page.show_pdf_page(rect, stamp_doc, 0, overlay=True)
-    # Zusätzliche Annotation zur Nachverfolgbarkeit auf der Seite
-    annot = page.add_square_annot(rect)
+    # Stempel explizit als PDF-Annotation anlegen (nicht einbetten).
+    _ = stamp_doc  # aktuell nur für API-Kompatibilität / zukünftige Erweiterung
+    annot = page.add_stamp_annot(rect)
     annot.set_info(
         title="PDF-Stamper",
         content="Stempel wurde automatisch platziert.",
     )
-    annot.update(opacity=0.0)
+    annot.update()
