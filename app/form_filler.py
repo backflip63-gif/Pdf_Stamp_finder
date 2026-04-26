@@ -71,7 +71,8 @@ class PDFFormFiller:
             for page_index in range(len(out)):
                 src_page = out[page_index]
                 dst_page = flattened.new_page(width=src_page.rect.width, height=src_page.rect.height)
-                dst_page.show_pdf_page(dst_page.rect, out, page_index, overlay=True)
+                pix = src_page.get_pixmap(dpi=300, alpha=False)
+                dst_page.insert_image(dst_page.rect, pixmap=pix, keep_proportion=False, overlay=True)
             flattened.save(output_pdf, garbage=4, deflate=True)
         finally:
             flattened.close()
