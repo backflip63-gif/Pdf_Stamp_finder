@@ -13,6 +13,13 @@ class FormFillerError(RuntimeError):
 
 
 class PDFFormFiller:
+    def _field_id(self, page_index: int, widget_index: int, widget: fitz.Widget) -> str:
+        field_name = widget.field_name or ""
+        xref = getattr(widget, "xref", 0) or 0
+        if xref:
+            return f"xref:{xref}:{field_name}"
+        return f"{page_index}:{widget_index}:{field_name}"
+
     def list_fields(self, pdf_path: Path) -> List[dict]:
         doc = fitz.open(pdf_path)
         try:
@@ -24,7 +31,7 @@ class PDFFormFiller:
                     continue
                 for widget_index, widget in enumerate(widgets):
                     field_name = widget.field_name or ""
-                    field_id = f"{page_index}:{widget_index}:{field_name}"
+                    field_id = self._field_id(page_index, widget_index, widget)
                     fields.append(
                         {
                             "id": field_id,
@@ -50,7 +57,7 @@ class PDFFormFiller:
                     continue
                 for widget_index, widget in enumerate(widgets):
                     field_name = widget.field_name or ""
-                    field_id = f"{page.number}:{widget_index}:{field_name}"
+                    field_id = self._field_id(page.number, widget_index, widget)
                     value_raw = field_values.get(field_id)
                     if value_raw is None and field_name:
                         value_raw = field_values.get(field_name)
