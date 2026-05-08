@@ -306,7 +306,9 @@ class MainWindow(QMainWindow):
 
         field_values = {name: self._read_field_value(widget) for name, widget in self.form_inputs.items()}
         try:
-            self.form_filler.fill_form(self.template_pdf_path, target_file, field_values, flatten=True)
+            # Für die spätere Stempel-Annotation muss die Feld-Visualisierung erhalten bleiben.
+            # Ein aggressives Flattening kann die sichtbaren Feldwerte entfernen.
+            self.form_filler.fill_form(self.template_pdf_path, target_file, field_values, flatten=False)
         except Exception as exc:
             QMessageBox.critical(self, "Fehler", f"Stempel-PDF konnte nicht erzeugt werden:\n{exc}")
             return
