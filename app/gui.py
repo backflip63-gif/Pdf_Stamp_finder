@@ -64,13 +64,13 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
     def _build_template_group(self) -> QGroupBox:
-        group = QGroupBox("1. Stempelvorlage")
+        group = QGroupBox("1. Stempelauswahl")
         layout = QVBoxLayout(group)
 
         row = QHBoxLayout()
         self.template_path_edit = QLineEdit()
         self.template_path_edit.setReadOnly(True)
-        btn_select_template = QPushButton("Formular-PDF wählen")
+        btn_select_template = QPushButton("Stempel auswählen")
         btn_select_template.clicked.connect(self.select_template_pdf)
         row.addWidget(self.template_path_edit, stretch=1)
         row.addWidget(btn_select_template)
@@ -78,14 +78,12 @@ class MainWindow(QMainWindow):
 
         self.fields_area = QScrollArea()
         self.fields_area.setWidgetResizable(True)
+        self.fields_area.setFixedHeight(180)
+        self.fields_area.setMaximumWidth(620)
         self.fields_container = QWidget()
         self.fields_form = QFormLayout(self.fields_container)
         self.fields_area.setWidget(self.fields_container)
         layout.addWidget(self.fields_area)
-
-        btn_fill = QPushButton("Stempel-PDF erzeugen")
-        btn_fill.clicked.connect(self.generate_stamp_pdf)
-        layout.addWidget(btn_fill)
 
         self.stamp_output_label = QLabel("Noch kein erzeugtes Stempel-PDF.")
         layout.addWidget(self.stamp_output_label)
@@ -120,11 +118,6 @@ class MainWindow(QMainWindow):
         self.grid_step_spin.setRange(1.0, 100.0)
         self.grid_step_spin.setSuffix(" mm")
         self.grid_step_spin.setDecimals(1)
-
-        self.margin_spin = QDoubleSpinBox()
-        self.margin_spin.setRange(0.0, 100.0)
-        self.margin_spin.setSuffix(" mm")
-        self.margin_spin.setDecimals(1)
 
         self.dpi_spin = QSpinBox()
         self.dpi_spin.setRange(72, 600)
@@ -171,6 +164,10 @@ class MainWindow(QMainWindow):
             "Dilation",
             "Erweitert erkannte belegte Bereiche um Sicherheitsabstand (in Pixeln). Höher = konservativer.",
         )
+        threshold_label = self._label_with_info(
+            "Weiß-Schwelle",
+            "Pixel heller als dieser Wert gelten als freie Fläche. Niedriger = strenger, höher = toleranter.",
+        )
 
         layout.addWidget(QLabel("Eingabeordner"), 0, 0)
         layout.addWidget(self.input_dir_edit, 0, 1)
@@ -182,30 +179,30 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Stempelbreite"), 2, 0)
         layout.addWidget(self.stamp_width_spin, 2, 1)
-        layout.addWidget(QLabel("Stempelhöhe"), 2, 2)
-        layout.addWidget(self.stamp_height_spin, 2, 3)
+        layout.addWidget(QLabel("Stempelhöhe"), 3, 0)
+        layout.addWidget(self.stamp_height_spin, 3, 1)
 
-        layout.addWidget(step_label, 3, 0)
-        layout.addWidget(self.grid_step_spin, 3, 1)
-        layout.addWidget(QLabel("Seitenrand"), 3, 2)
-        layout.addWidget(self.margin_spin, 3, 3)
+        advanced_group = QGroupBox("Einstellungen")
+        advanced_group.setCheckable(True)
+        advanced_group.setChecked(False)
+        advanced_layout = QGridLayout(advanced_group)
+        advanced_layout.addWidget(step_label, 0, 0)
+        advanced_layout.addWidget(self.grid_step_spin, 0, 1)
+        advanced_layout.addWidget(dpi_label, 1, 0)
+        advanced_layout.addWidget(self.dpi_spin, 1, 1)
+        advanced_layout.addWidget(threshold_label, 2, 0)
+        advanced_layout.addWidget(self.threshold_spin, 2, 1)
+        advanced_layout.addWidget(occ_label, 3, 0)
+        advanced_layout.addWidget(self.max_occ_spin, 3, 1)
+        advanced_layout.addWidget(dilation_label, 4, 0)
+        advanced_layout.addWidget(self.dilation_spin, 4, 1)
+        advanced_layout.addWidget(scale_label, 5, 0)
+        advanced_layout.addWidget(self.scale_down_spin, 5, 1)
+        advanced_layout.addWidget(QLabel("Seitenmodus"), 6, 0)
+        advanced_layout.addWidget(self.mode_combo, 6, 1)
 
-        layout.addWidget(dpi_label, 4, 0)
-        layout.addWidget(self.dpi_spin, 4, 1)
-        layout.addWidget(QLabel("Weiß-Schwelle"), 4, 2)
-        layout.addWidget(self.threshold_spin, 4, 3)
-
-        layout.addWidget(occ_label, 5, 0)
-        layout.addWidget(self.max_occ_spin, 5, 1)
-        layout.addWidget(dilation_label, 5, 2)
-        layout.addWidget(self.dilation_spin, 5, 3)
-
-        layout.addWidget(scale_label, 6, 0)
-        layout.addWidget(self.scale_down_spin, 6, 1)
-        layout.addWidget(QLabel("Seitenmodus"), 6, 2)
-        layout.addWidget(self.mode_combo, 6, 3)
-
-        layout.addWidget(btn_run, 7, 0, 1, 4)
+        layout.addWidget(advanced_group, 4, 0, 1, 3)
+        layout.addWidget(btn_run, 5, 0, 1, 3)
 
         return group
 
@@ -226,7 +223,6 @@ class MainWindow(QMainWindow):
         self.stamp_width_spin.setValue(s.stamp_width_mm)
         self.stamp_height_spin.setValue(s.stamp_height_mm)
         self.grid_step_spin.setValue(s.grid_step_mm)
-        self.margin_spin.setValue(s.page_margin_mm)
         self.dpi_spin.setValue(s.render_dpi)
         self.threshold_spin.setValue(s.whiteness_threshold)
         self.max_occ_spin.setValue(s.max_occupancy_ratio)
@@ -239,7 +235,7 @@ class MainWindow(QMainWindow):
             stamp_width_mm=self.stamp_width_spin.value(),
             stamp_height_mm=self.stamp_height_spin.value(),
             grid_step_mm=self.grid_step_spin.value(),
-            page_margin_mm=self.margin_spin.value(),
+            page_margin_mm=self.settings.page_margin_mm,
             render_dpi=self.dpi_spin.value(),
             whiteness_threshold=self.threshold_spin.value(),
             max_occupancy_ratio=self.max_occ_spin.value(),
@@ -363,15 +359,13 @@ class MainWindow(QMainWindow):
         for file_result in results:
             if file_result.success:
                 success_count += 1
-                self.log(f"OK: {file_result.input_file.name} -> {file_result.output_file}")
+                self.log(f"OK: {file_result.input_file.name}")
                 for pr in file_result.page_results:
                     if pr.status == "no_position":
                         no_position_count += 1
                     if pr.scale < 0.999:
                         reduced_count += 1
-                    self.log(
-                        f"  Seite {pr.page_index + 1}: {pr.status}, scale={pr.scale:.2f}, occ={pr.occupancy_ratio:.4f}, rect={pr.rect}"
-                    )
+                    self.log(f"  Seite {pr.page_index + 1}: {pr.status}, scale={pr.scale:.2f}")
             else:
                 self.log(f"FEHLER: {file_result.input_file.name}: {file_result.error}")
 
