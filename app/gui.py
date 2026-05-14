@@ -371,6 +371,15 @@ class MainWindow(QMainWindow):
                 unstamped_files.append(dst)
                 self.log(f"WARNUNG: Nicht gestempelt kopiert -> {dst.name}")
 
+        rotated_review_files: list[Path] = []
+        for file_result in results:
+            if not file_result.output_file:
+                continue
+            needs_review = any("mittig platziert" in (pr.note or "") for pr in file_result.page_results)
+            if needs_review:
+                rotated_review_files.append(file_result.output_file)
+                self.log(f"Hinweis: Rotierte Seiten erkannt, bitte prüfen -> {file_result.output_file.name}")
+
         self.log(
             "Zusammenfassung: "
             f"{success_count}/{len(results)} Dateien erfolgreich, "
@@ -385,6 +394,8 @@ class MainWindow(QMainWindow):
 
         if unstamped_files:
             self._open_unstamped_files(unstamped_files)
+        if rotated_review_files:
+            self._open_unstamped_files(rotated_review_files)
 
     def _open_unstamped_files(self, files: list[Path]) -> None:
         for file_path in files:

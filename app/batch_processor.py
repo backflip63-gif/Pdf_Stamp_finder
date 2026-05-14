@@ -60,7 +60,7 @@ class BatchProcessor:
                     page = doc[page_index]
                     rotation = int(page.rotation) % 360
                     if rotation in {90, 180, 270}:
-                        rect = self._rotation_fixed_rect(page, target_w, target_h, rotation)
+                        rect = self._rotation_center_rect(page, target_w, target_h)
                         place_stamp_pdf(page, stamp_source, rect)
                         result.page_results.append(
                             PlacementResult(
@@ -69,7 +69,7 @@ class BatchProcessor:
                                 scale=1.0,
                                 occupancy_ratio=0.0,
                                 status="placed",
-                                note=f"Rotation {rotation}°: feste Eckplatzierung angewendet.",
+                                note=f"Rotation {rotation}°: Stempel mittig platziert (Datei zur Prüfung öffnen).",
                             )
                         )
                         continue
@@ -133,19 +133,11 @@ class BatchProcessor:
             return [page_count - 1]
         return list(range(page_count))
 
-    def _rotation_fixed_rect(self, page: fitz.Page, stamp_w: float, stamp_h: float, rotation: int) -> fitz.Rect:
+    def _rotation_center_rect(self, page: fitz.Page, stamp_w: float, stamp_h: float) -> fitz.Rect:
         page_w = page.rect.width
         page_h = page.rect.height
-        anchor_map = {
-            0: (page_w, 0.0),
-            90: (page_w, page_h),
-            180: (0.0, page_h),
-            270: (0.0, 0.0),
-        }
-        ax, ay = anchor_map.get(rotation % 360, (page_w, 0.0))
-
-        x0 = ax - stamp_w if ax >= page_w else ax
-        y0 = ay - stamp_h if ay >= page_h else ay
+        x0 = (page_w - stamp_w) * 0.5
+        y0 = (page_h - stamp_h) * 0.5
         x0 = max(0.0, min(page_w - stamp_w, x0))
         y0 = max(0.0, min(page_h - stamp_h, y0))
         return fitz.Rect(x0, y0, x0 + stamp_w, y0 + stamp_h)
