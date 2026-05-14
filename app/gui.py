@@ -7,6 +7,8 @@ from typing import Dict
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -146,14 +148,17 @@ class MainWindow(QMainWindow):
 
         btn_run = QPushButton("Stapelverarbeitung starten")
         btn_run.clicked.connect(self.run_batch)
-        btn_select_input = QPushButton("Datei auswählen oder Ordner auswählen")
-        btn_select_input.clicked.connect(self.select_input_path)
+        btn_select_file = QPushButton("Datei auswählen")
+        btn_select_file.clicked.connect(self.select_input_file)
+        btn_select_folder = QPushButton("Ordner auswählen")
+        btn_select_folder.clicked.connect(self.select_input_folder)
         btn_settings = QPushButton("Einstellungen")
         btn_settings.clicked.connect(self.open_settings_dialog)
 
         layout.addWidget(QLabel("Eingabe"), 0, 0)
         layout.addWidget(self.input_dir_edit, 0, 1)
-        layout.addWidget(btn_select_input, 0, 2)
+        layout.addWidget(btn_select_file, 0, 2)
+        layout.addWidget(btn_select_folder, 1, 2)
 
         layout.addWidget(QLabel("Stempelbreite"), 2, 0)
         layout.addWidget(self.stamp_width_spin, 2, 1)
@@ -267,14 +272,15 @@ class MainWindow(QMainWindow):
         self._apply_stamp_size_defaults(self.filled_stamp_pdf_path)
         self.log(f"Stempel-PDF erzeugt: {target_file}")
 
-    def select_input_path(self) -> None:
+    def select_input_file(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(self, "Datei auswählen", "", "PDF (*.pdf)")
         if file_name:
             path = Path(file_name)
             self.selected_input_file = path
             self.input_dir_path = path.parent
             self.input_dir_edit.setText(str(path))
-            return
+
+    def select_input_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Ordner auswählen")
         if folder:
             self.selected_input_file = None
@@ -293,6 +299,7 @@ class MainWindow(QMainWindow):
 
         settings = self._collect_settings()
         output_dir = self.input_dir_path / "gestempelt"
+        ensure_dir(output_dir)
         config = BatchJobConfig(
             input_dir=self.input_dir_path,
             output_dir=output_dir,
