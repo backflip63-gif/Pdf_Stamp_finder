@@ -765,11 +765,21 @@ class ManualPdfEditorDialog(QDialog):
         vp = self.pdf_view.viewport().rect()
         if page_w <= 0 or page_h <= 0:
             return QRectF(vp)
-        # Für SinglePage + FitToWidth entspricht die Seitenbreite der Viewport-Breite.
-        disp_w = float(vp.width())
-        disp_h = disp_w * (page_h / page_w)
-        x = 0.0
-        y = 0.0
+        if self.pdf_view.zoomMode() == QPdfView.ZoomMode.FitToWidth:
+            disp_w = float(vp.width())
+            disp_h = disp_w * (page_h / page_w)
+        else:
+            zoom = float(self.pdf_view.zoomFactor())
+            disp_w = page_w * zoom
+            disp_h = page_h * zoom
+
+        hbar = self.pdf_view.horizontalScrollBar()
+        vbar = self.pdf_view.verticalScrollBar()
+        x = -float(hbar.value())
+        y = -float(vbar.value())
+
+        if disp_w < vp.width():
+            x = (vp.width() - disp_w) * 0.5
         if disp_h < vp.height():
             y = (vp.height() - disp_h) * 0.5
         return QRectF(x, y, disp_w, disp_h)
