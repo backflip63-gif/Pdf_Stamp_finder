@@ -661,7 +661,7 @@ class ManualPdfEditorDialog(QDialog):
         self.drag_offset = QPointF(0.0, 0.0)
 
         self.setWindowTitle(f"PDF-Editor: {source_pdf.name}")
-        self.resize(1400, 950)
+        self.showMaximized()
 
         root = QVBoxLayout(self)
         ctrl = QHBoxLayout()
@@ -670,10 +670,9 @@ class ManualPdfEditorDialog(QDialog):
         self.btn_insert = QPushButton("Stempel platzieren")
         self.btn_place = QPushButton("Position speichern")
         self.info = QLabel("Mit Strg+Mausrad zoomen, normal scrollen.")
-        ctrl.addWidget(self.btn_zoom_out)
-        ctrl.addWidget(self.btn_zoom_in)
         ctrl.addWidget(self.btn_insert)
         ctrl.addWidget(self.btn_place)
+        self.info.setText("Vollansicht aktiv (Zoom deaktiviert).")
         ctrl.addWidget(self.info)
         ctrl.addStretch(1)
         root.addLayout(ctrl)
@@ -687,13 +686,11 @@ class ManualPdfEditorDialog(QDialog):
         self.pdf_view = QPdfView(self)
         self.pdf_view.setDocument(self.pdf_doc)
         self.pdf_view.setPageMode(QPdfView.PageMode.SinglePage)
-        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitInView)
         self.pdf_view.pageNavigator().jump(page_index, QPointF(), 0)
         self.pdf_view.viewport().installEventFilter(self)
         root.addWidget(self.pdf_view, stretch=1)
 
-        self.btn_zoom_in.clicked.connect(lambda: self._set_zoom(self.pdf_view.zoomFactor() * 1.2))
-        self.btn_zoom_out.clicked.connect(lambda: self._set_zoom(self.pdf_view.zoomFactor() / 1.2))
         self.btn_insert.clicked.connect(self._insert_stamp_center)
         self.btn_place.clicked.connect(self._save_stamp_at_click)
 
@@ -701,14 +698,7 @@ class ManualPdfEditorDialog(QDialog):
         if obj is self.pdf_view.viewport():
             etype = getattr(event, "type", lambda: None)()
             if etype == 31:  # Wheel
-                mods = event.modifiers()
-                if mods & Qt.ControlModifier:
-                    delta = event.angleDelta().y()
-                    factor = 1.15 if delta > 0 else 0.87
-                    self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
-                    self.pdf_view.setZoomFactor(max(0.1, min(8.0, self.pdf_view.zoomFactor() * factor)))
-                    self._refresh_stamp_overlay()
-                    return True
+                return True
             if etype == 2 and self.stamp_label is not None:  # MouseButtonPress
                 local = event.position()
                 if self.stamp_label.geometry().contains(int(local.x()), int(local.y())):
@@ -818,7 +808,7 @@ class ManualPdfEditorDialog(QDialog):
         vp = self.pdf_view.viewport().rect()
         if page_w <= 0 or page_h <= 0:
             return QRectF(vp)
-        if self.pdf_view.zoomMode() == QPdfView.ZoomMode.FitToWidth:
+        if self.pdf_view.zoomMode() in {QPdfView.ZoomMode.FitToWidth, QPdfView.ZoomMode.FitInView}:
             disp_w = float(vp.width())
             disp_h = disp_w * (page_h / page_w)
         else:
@@ -836,11 +826,6 @@ class ManualPdfEditorDialog(QDialog):
         if disp_h < vp.height():
             y = (vp.height() - disp_h) * 0.5
         return QRectF(x, y, disp_w, disp_h)
-
-    def _set_zoom(self, value: float) -> None:
-        self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
-        self.pdf_view.setZoomFactor(max(0.1, min(8.0, value)))
-        self._refresh_stamp_overlay()
 
     def _update_stamp_ratio_from_overlay(self) -> None:
         if self.stamp_label is None:
