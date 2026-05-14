@@ -18,6 +18,7 @@ class PlacementSettings:
     allow_scale_down_to: float = 0.85
     scale_step: float = 0.05
     process_mode: str = "all"  # all | first | last
+    preferred_anchor: str = "bottom_right"  # top_left|top_right|bottom_left|bottom_right|bottom_center|right_center
 
 
 @dataclass

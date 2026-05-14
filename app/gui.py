@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QRadioButton,
     QScrollArea,
     QSpinBox,
     QTextEdit,
@@ -144,6 +145,7 @@ class MainWindow(QMainWindow):
             "dilation_px": self.settings.dilation_px,
             "allow_scale_down_to": self.settings.allow_scale_down_to,
             "process_mode": self.settings.process_mode,
+            "preferred_anchor": self.settings.preferred_anchor,
         }
 
         btn_run = QPushButton("Stapelverarbeitung starten")
@@ -200,6 +202,7 @@ class MainWindow(QMainWindow):
             dilation_px=int(self.advanced_values["dilation_px"]),
             allow_scale_down_to=float(self.advanced_values["allow_scale_down_to"]),
             process_mode=str(self.advanced_values["process_mode"]),
+            preferred_anchor=str(self.advanced_values["preferred_anchor"]),
         )
         save_settings(s)
         return s
@@ -428,6 +431,27 @@ class MainWindow(QMainWindow):
         mode = QComboBox()
         mode.addItems(["all", "first", "last"])
         mode.setCurrentText(str(self.advanced_values["process_mode"]))
+        anchor_group = QGroupBox("Bevorzugte Stempelposition")
+        anchor_layout = QGridLayout(anchor_group)
+        anchor_buttons = {
+            "top_left": QRadioButton("Oben links"),
+            "top_right": QRadioButton("Oben rechts"),
+            "bottom_left": QRadioButton("Unten links"),
+            "bottom_right": QRadioButton("Unten rechts"),
+            "bottom_center": QRadioButton("Unten Mitte"),
+            "right_center": QRadioButton("Rechts Mitte"),
+        }
+        anchor_layout.addWidget(anchor_buttons["top_left"], 0, 0)
+        anchor_layout.addWidget(anchor_buttons["top_right"], 0, 2)
+        anchor_layout.addWidget(anchor_buttons["right_center"], 1, 2)
+        anchor_layout.addWidget(anchor_buttons["bottom_left"], 2, 0)
+        anchor_layout.addWidget(anchor_buttons["bottom_center"], 2, 1)
+        anchor_layout.addWidget(anchor_buttons["bottom_right"], 2, 2)
+        selected_anchor = str(self.advanced_values["preferred_anchor"])
+        if selected_anchor in anchor_buttons:
+            anchor_buttons[selected_anchor].setChecked(True)
+        else:
+            anchor_buttons["bottom_right"].setChecked(True)
 
         layout.addRow("Raster-Schritt (kleiner = genauer, langsamer)", grid_step)
         layout.addRow("Render-DPI (höher = präziser, langsamer)", dpi)
@@ -436,6 +460,7 @@ class MainWindow(QMainWindow):
         layout.addRow("Dilation (Sicherheitsabstand in Pixeln)", dilation)
         layout.addRow("Min. Skalierung (bei Platzmangel)", scale)
         layout.addRow("Seitenmodus", mode)
+        layout.addRow(anchor_group)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dlg.accept)
@@ -451,4 +476,5 @@ class MainWindow(QMainWindow):
                 "dilation_px": dilation.value(),
                 "allow_scale_down_to": scale.value(),
                 "process_mode": mode.currentText(),
+                "preferred_anchor": next((k for k, b in anchor_buttons.items() if b.isChecked()), "bottom_right"),
             }

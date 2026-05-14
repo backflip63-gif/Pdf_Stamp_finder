@@ -85,13 +85,21 @@ class StampPlacer:
         return float(area.mean())
 
     def _score(self, page_rect: fitz.Rect, rect: fitz.Rect, occ: float) -> float:
-        # Bonus für Randnähe, aber ohne blind auf unten rechts zu gehen.
-        left = rect.x0
-        top = rect.y0
-        right = page_rect.width - rect.x1
-        bottom = page_rect.height - rect.y1
-        edge_distance = min(left, top, right, bottom)
+        anchor_x, anchor_y = self._anchor_target(page_rect, self.settings.preferred_anchor)
+        cx = (rect.x0 + rect.x1) * 0.5
+        cy = (rect.y0 + rect.y1) * 0.5
+        anchor_distance = ((cx - anchor_x) ** 2 + (cy - anchor_y) ** 2) ** 0.5
+        return occ * 1000.0 + anchor_distance * 0.08
 
-        # leichte Präferenz für rechts unten
-        right_bottom_bias = right * 0.02 + bottom * 0.02
-        return occ * 1000.0 + edge_distance * 0.05 + right_bottom_bias
+    def _anchor_target(self, page_rect: fitz.Rect, anchor: str) -> tuple[float, float]:
+        w = page_rect.width
+        h = page_rect.height
+        targets = {
+            "top_left": (0.0, 0.0),
+            "top_right": (w, 0.0),
+            "bottom_left": (0.0, h),
+            "bottom_right": (w, h),
+            "bottom_center": (w * 0.5, h),
+            "right_center": (w, h * 0.5),
+        }
+        return targets.get(anchor, targets["bottom_right"])
