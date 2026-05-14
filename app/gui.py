@@ -653,205 +653,195 @@ class ManualPdfEditorDialog(QDialog):
         self.target_pdf = target_pdf
         self.stamp_pdf = stamp_pdf
         self.page_index = page_index
-        self.stamp_label: QLabel | None = None
-        self.stamp_size_px: tuple[int, int] = (0, 0)
-        self.stamp_size_pt: tuple[float, float] = (0.0, 0.0)
-        self.stamp_center_ratio: tuple[float, float] | None = None
-        self.drag_active = False
-        self.drag_offset = QPointF(0.0, 0.0)
+        self.render_dpi = 150
+        self.page_pixmap: QPixmap | None = None
+        self.stamp_preview: QPixmap | None = None
+        self.annotation_items: list[dict] = []
+        self.selected_index: int | None = None
 
         self.setWindowTitle(f"PDF-Editor: {source_pdf.name}")
-        self.resize(1800, 1200)
-        self.setWindowState(Qt.WindowMaximized)
+        self.resize(1500, 1000)
 
         root = QVBoxLayout(self)
-        ctrl = QHBoxLayout()
-        self.btn_zoom_out = QPushButton("Zoom -")
-        self.btn_zoom_in = QPushButton("Zoom +")
-        self.btn_insert = QPushButton("Stempel platzieren")
-        self.btn_place = QPushButton("Position speichern")
-        self.info = QLabel("Mit Strg+Mausrad zoomen, normal scrollen.")
-        ctrl.addWidget(self.btn_insert)
-        ctrl.addWidget(self.btn_place)
-        self.info.setText("Vollansicht aktiv (Zoom deaktiviert).")
-        ctrl.addWidget(self.info)
-        ctrl.addStretch(1)
-        root.addLayout(ctrl)
         self.lbl_status = QLabel(
             f"Seite {page_index + 1} | Manuell {queue_index}/{queue_total} | {note or 'Manuelle Platzierung erforderlich.'}"
         )
         root.addWidget(self.lbl_status)
 
-        self.pdf_doc = QPdfDocument(self)
-        self.pdf_doc.load(str(source_pdf))
-        self.pdf_view = QPdfView(self)
-        self.pdf_view.setDocument(self.pdf_doc)
-        self.pdf_view.setPageMode(QPdfView.PageMode.SinglePage)
-        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitInView)
-        self.pdf_view.pageNavigator().jump(page_index, QPointF(), 0)
-        self.pdf_view.viewport().installEventFilter(self)
-        root.addWidget(self.pdf_view, stretch=1)
+        props = QHBoxLayout()
+        self.x_spin = QDoubleSpinBox(); self.x_spin.setRange(-2000, 2000); self.x_spin.setSuffix(' pt')
+        self.y_spin = QDoubleSpinBox(); self.y_spin.setRange(-2000, 2000); self.y_spin.setSuffix(' pt')
+        self.w_spin = QDoubleSpinBox(); self.w_spin.setRange(1, 5000); self.w_spin.setSuffix(' pt')
+        self.h_spin = QDoubleSpinBox(); self.h_spin.setRange(1, 5000); self.h_spin.setSuffix(' pt')
+        self.rot_spin = QSpinBox(); self.rot_spin.setRange(0, 359); self.rot_spin.setSuffix('°')
+        self.btn_apply = QPushButton('Übernehmen')
+        self.btn_add = QPushButton('Neue Stempel-Annotation')
+        self.btn_delete = QPushButton('Löschen')
+        self.btn_save = QPushButton('PDF speichern')
+        for t,w in [('X',self.x_spin),('Y',self.y_spin),('Breite',self.w_spin),('Höhe',self.h_spin),('Rotation',self.rot_spin)]:
+            props.addWidget(QLabel(t)); props.addWidget(w)
+        props.addWidget(self.btn_apply); props.addWidget(self.btn_add); props.addWidget(self.btn_delete); props.addWidget(self.btn_save)
+        root.addLayout(props)
 
-        self.btn_insert.clicked.connect(self._insert_stamp_center)
-        self.btn_place.clicked.connect(self._save_stamp_at_click)
+        body = QHBoxLayout()
+        self.scene = QGraphicsScene(self)
+        self.view = QGraphicsView(self.scene)
+        self.view.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        self.view.setDragMode(QGraphicsView.ScrollHandDrag)
+        body.addWidget(self.view, stretch=1)
 
-    def eventFilter(self, obj: object, event: object) -> bool:
-        if obj is self.pdf_view.viewport():
-            etype = getattr(event, "type", lambda: None)()
-            if etype == 31:  # Wheel
-                return True
-            if etype == 2 and self.stamp_label is not None:  # MouseButtonPress
-                local = event.position()
-                if self.stamp_label.geometry().contains(int(local.x()), int(local.y())):
-                    self.drag_active = True
-                    self.drag_offset = QPointF(local.x() - self.stamp_label.x(), local.y() - self.stamp_label.y())
-                    return True
-            if etype == 5 and self.drag_active and self.stamp_label is not None:  # MouseMove
-                local = event.position()
-                nx = int(local.x() - self.drag_offset.x())
-                ny = int(local.y() - self.drag_offset.y())
-                vp = self.pdf_view.viewport().rect()
-                nx = max(0, min(vp.width() - self.stamp_label.width(), nx))
-                ny = max(0, min(vp.height() - self.stamp_label.height(), ny))
-                self.stamp_label.move(nx, ny)
-                self._update_stamp_ratio_from_overlay()
-                return True
-            if etype == 3 and self.drag_active:  # MouseButtonRelease
-                self.drag_active = False
-                return True
-        return super().eventFilter(obj, event)
+        side = QVBoxLayout()
+        side.addWidget(QLabel('Stempel-Annotationen'))
+        from PySide6.QtWidgets import QListWidget
+        self.annot_list = QListWidget()
+        side.addWidget(self.annot_list, stretch=1)
+        body.addLayout(side)
+        root.addLayout(body, stretch=1)
 
-    def _insert_stamp_center(self) -> None:
+        self.btn_add.clicked.connect(self._add_annotation)
+        self.btn_delete.clicked.connect(self._delete_selected)
+        self.btn_apply.clicked.connect(self._apply_properties)
+        self.btn_save.clicked.connect(self._save_pdf)
+        self.annot_list.currentRowChanged.connect(self._select_index)
+
+        self._load_page_and_annotations()
+
+    def _load_stamp_preview(self) -> None:
         if self.stamp_pdf is None:
+            self.stamp_preview = None
             return
-        if self.stamp_label is not None:
-            return
+        doc = fitz.open(self.stamp_pdf)
         try:
-            stamp_doc = fitz.open(self.stamp_pdf)
-            try:
-                stamp_w_pt, stamp_h_pt = stamp_doc[0].rect.width, stamp_doc[0].rect.height
-                pix = stamp_doc[0].get_pixmap(dpi=150, alpha=True)
-            finally:
-                stamp_doc.close()
-        except Exception as exc:
-            QMessageBox.critical(self, "Fehler", f"Stempel konnte nicht geladen werden:\n{exc}")
-            return
+            pix = doc[0].get_pixmap(dpi=120, alpha=True)
+        finally:
+            doc.close()
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888).copy()
-        qpix = QPixmap.fromImage(img)
-        page_w, page_h = self._current_page_size_pt()
-        if page_w <= 0 or page_h <= 0:
-            return
-        page_rect = self._page_display_rect(page_w, page_h)
-        scale = page_rect.width() / page_w
-        stamp_w_px = max(12, int(stamp_w_pt * scale))
-        stamp_h_px = max(12, int(stamp_h_pt * scale))
-        scaled = qpix.scaled(stamp_w_px, stamp_h_px, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.stamp_preview = QPixmap.fromImage(img)
 
-        self.stamp_label = QLabel(self.pdf_view.viewport())
-        self.stamp_label.setPixmap(scaled)
-        self.stamp_label.setScaledContents(True)
-        self.stamp_label.setWindowOpacity(0.85)
-        self.stamp_label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.stamp_label.resize(scaled.size())
-        self.stamp_size_px = (scaled.width(), scaled.height())
-        self.stamp_size_pt = (stamp_w_pt, stamp_h_pt)
-        cx = int(page_rect.center().x() - scaled.width() * 0.5)
-        cy = int(page_rect.center().y() - scaled.height() * 0.5)
-        self.stamp_label.move(cx, cy)
-        self._update_stamp_ratio_from_overlay()
-        self.stamp_label.show()
-
-    def _save_stamp_at_click(self) -> None:
-        if self.stamp_pdf is None or self.stamp_label is None:
-            QMessageBox.warning(self, "Hinweis", "Bitte zuerst 'Stempel platzieren' klicken.")
-            return
+    def _load_page_and_annotations(self) -> None:
+        self._load_stamp_preview()
+        doc = fitz.open(self.target_pdf)
         try:
-            out_doc = fitz.open(self.target_pdf)
-            stamp_doc = fitz.open(self.stamp_pdf)
-            try:
-                page = out_doc[self.page_index]
-                sw, sh = stamp_doc[0].rect.width, stamp_doc[0].rect.height
-                if self.stamp_center_ratio is None:
-                    self._update_stamp_ratio_from_overlay()
-                rx, ry = self.stamp_center_ratio or (0.5, 0.5)
-                rx = max(0.0, min(1.0, rx))
-                ry = max(0.0, min(1.0, ry))
-                # Klickposition liegt im sichtbaren (rotierten) Koordinatensystem.
-                # Für das Speichern transformieren wir in das PDF-Basissystem zurück.
-                vis_w, vis_h = page.rect.width, page.rect.height
-                center_rot = fitz.Point(rx * vis_w, ry * vis_h)
-                center_pdf = center_rot * page.derotation_matrix
-                x0 = center_pdf.x - sw * 0.5
-                y0 = center_pdf.y - sh * 0.5
-                rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh)
-                page.show_pdf_page(rect, stamp_doc, 0, overlay=True, rotate=int(page.rotation) % 360)
-                out_doc.save(self.target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
-            finally:
-                stamp_doc.close()
-                out_doc.close()
-            QMessageBox.information(self, "Gespeichert", "Stempel wurde im Ziel-PDF gespeichert.")
-            self.accept()
-        except Exception as exc:
-            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{exc}")
+            page = doc[self.page_index]
+            pix = page.get_pixmap(dpi=self.render_dpi, alpha=False)
+            annots = []
+            a = page.first_annot
+            while a is not None:
+                if a.type[0] == fitz.PDF_ANNOT_STAMP:
+                    annots.append((fitz.Rect(a.rect), int(a.rotation or 0)))
+                a = a.next
+        finally:
+            doc.close()
 
-    def _current_page_size_pt(self) -> tuple[float, float]:
+        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+        self.page_pixmap = QPixmap.fromImage(img)
+        self.scene.clear()
+        self.annotation_items.clear()
+        self.annot_list.clear()
+        page_item = QGraphicsPixmapItem(self.page_pixmap)
+        self.scene.addItem(page_item)
+
+        for idx, (rect, rot) in enumerate(annots):
+            self._create_item_from_pdf_rect(rect, rot, f'Annot {idx+1}')
+        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def _scale(self) -> float:
+        return self.render_dpi / 72.0
+
+    def _create_item_from_pdf_rect(self, rect: fitz.Rect, rot: int, name: str) -> None:
+        if self.stamp_preview is None:
+            return
+        s = self._scale()
+        x, y, w, h = rect.x0 * s, rect.y0 * s, rect.width * s, rect.height * s
+        pix = self.stamp_preview.scaled(max(10, int(w)), max(10, int(h)), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        item = QGraphicsPixmapItem(pix)
+        item.setPos(x, y)
+        item.setRotation(rot)
+        item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
+        item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
+        item.setOpacity(0.85)
+        self.scene.addItem(item)
+        self.annotation_items.append({'item': item, 'rotation': rot})
+        self.annot_list.addItem(name)
+
+    def _add_annotation(self) -> None:
+        if self.stamp_preview is None:
+            QMessageBox.warning(self, 'Hinweis', 'Kein Stempel-PDF verfügbar.')
+            return
+        w, h = self.stamp_preview.width(), self.stamp_preview.height()
+        item = QGraphicsPixmapItem(self.stamp_preview)
+        item.setPos(50, 50)
+        item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
+        item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
+        item.setOpacity(0.85)
+        self.scene.addItem(item)
+        self.annotation_items.append({'item': item, 'rotation': 0})
+        self.annot_list.addItem(f'Annot {len(self.annotation_items)}')
+        self.annot_list.setCurrentRow(len(self.annotation_items)-1)
+
+    def _select_index(self, idx: int) -> None:
+        self.selected_index = idx if idx >= 0 and idx < len(self.annotation_items) else None
+        if self.selected_index is None:
+            return
+        rec = self.annotation_items[self.selected_index]
+        item = rec['item']
+        s = self._scale()
+        self.x_spin.setValue(item.pos().x()/s)
+        self.y_spin.setValue(item.pos().y()/s)
+        self.w_spin.setValue(item.pixmap().width()/s)
+        self.h_spin.setValue(item.pixmap().height()/s)
+        self.rot_spin.setValue(int(rec['rotation'])%360)
+
+    def _apply_properties(self) -> None:
+        if self.selected_index is None:
+            return
+        rec = self.annotation_items[self.selected_index]
+        item = rec['item']
+        s = self._scale()
+        w_px = max(10, int(self.w_spin.value()*s))
+        h_px = max(10, int(self.h_spin.value()*s))
+        if self.stamp_preview is not None:
+            item.setPixmap(self.stamp_preview.scaled(w_px, h_px, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+        item.setPos(self.x_spin.value()*s, self.y_spin.value()*s)
+        rec['rotation'] = int(self.rot_spin.value())
+        item.setRotation(rec['rotation'])
+
+    def _delete_selected(self) -> None:
+        if self.selected_index is None:
+            return
+        rec = self.annotation_items.pop(self.selected_index)
+        self.scene.removeItem(rec['item'])
+        self.annot_list.takeItem(self.selected_index)
+        self.selected_index = None
+
+    def _save_pdf(self) -> None:
+        if self.stamp_pdf is None:
+            QMessageBox.warning(self, 'Hinweis', 'Kein Stempel-PDF verfügbar.')
+            return
+        out_doc = fitz.open(self.target_pdf)
+        stamp_doc = fitz.open(self.stamp_pdf)
         try:
-            doc = fitz.open(self.source_pdf)
-            try:
-                rect = doc[self.page_index].rect
-                return rect.width, rect.height
-            finally:
-                doc.close()
-        except Exception:
-            return (0.0, 0.0)
+            page = out_doc[self.page_index]
+            a = page.first_annot
+            to_delete = []
+            while a is not None:
+                if a.type[0] == fitz.PDF_ANNOT_STAMP:
+                    to_delete.append(a)
+                a = a.next
+            for annot in to_delete:
+                page.delete_annot(annot)
 
-    def _page_display_rect(self, page_w: float, page_h: float) -> QRectF:
-        vp = self.pdf_view.viewport().rect()
-        if page_w <= 0 or page_h <= 0:
-            return QRectF(vp)
-        if self.pdf_view.zoomMode() in {QPdfView.ZoomMode.FitToWidth, QPdfView.ZoomMode.FitInView}:
-            disp_w = float(vp.width())
-            disp_h = disp_w * (page_h / page_w)
-        else:
-            zoom = float(self.pdf_view.zoomFactor())
-            disp_w = page_w * zoom
-            disp_h = page_h * zoom
+            s = self._scale()
+            for rec in self.annotation_items:
+                item = rec['item']
+                rect = fitz.Rect(item.pos().x()/s, item.pos().y()/s, (item.pos().x()+item.pixmap().width())/s, (item.pos().y()+item.pixmap().height())/s)
+                pix = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
+                annot = page.add_stamp_annot(rect, stamp=pix)
+                annot.set_rotation(int(rec['rotation'])%360)
+                annot.update()
+            out_doc.save(self.target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+        finally:
+            stamp_doc.close(); out_doc.close()
+        QMessageBox.information(self, 'Gespeichert', 'Stempel-Annotationen gespeichert.')
+        self.accept()
 
-        hbar = self.pdf_view.horizontalScrollBar()
-        vbar = self.pdf_view.verticalScrollBar()
-        x = -float(hbar.value())
-        y = -float(vbar.value())
-
-        if disp_w < vp.width():
-            x = (vp.width() - disp_w) * 0.5
-        if disp_h < vp.height():
-            y = (vp.height() - disp_h) * 0.5
-        return QRectF(x, y, disp_w, disp_h)
-
-    def _update_stamp_ratio_from_overlay(self) -> None:
-        if self.stamp_label is None:
-            return
-        page_w, page_h = self._current_page_size_pt()
-        page_rect = self._page_display_rect(page_w, page_h)
-        center_x = self.stamp_label.x() + self.stamp_label.width() * 0.5
-        center_y = self.stamp_label.y() + self.stamp_label.height() * 0.5
-        rx = (center_x - page_rect.left()) / max(1.0, page_rect.width())
-        ry = (center_y - page_rect.top()) / max(1.0, page_rect.height())
-        self.stamp_center_ratio = (max(0.0, min(1.0, rx)), max(0.0, min(1.0, ry)))
-
-    def _refresh_stamp_overlay(self) -> None:
-        if self.stamp_label is None or self.stamp_center_ratio is None:
-            return
-        page_w, page_h = self._current_page_size_pt()
-        page_rect = self._page_display_rect(page_w, page_h)
-        if page_w <= 0:
-            return
-        scale = page_rect.width() / page_w
-        w_px = max(12, int(self.stamp_size_pt[0] * scale))
-        h_px = max(12, int(self.stamp_size_pt[1] * scale))
-        if self.stamp_label.pixmap() is not None:
-            self.stamp_label.resize(w_px, h_px)
-        rx, ry = self.stamp_center_ratio
-        cx = page_rect.left() + rx * page_rect.width()
-        cy = page_rect.top() + ry * page_rect.height()
-        self.stamp_label.move(int(cx - w_px * 0.5), int(cy - h_px * 0.5))
