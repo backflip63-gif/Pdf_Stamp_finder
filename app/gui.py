@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
         self.template_pdf_path: Path | None = None
         self.filled_stamp_pdf_path: Path | None = None
         self.input_dir_path: Path | None = None
-        self.output_dir_path: Path | None = None
+        self.selected_input_file: Path | None = None
 
         self._build_ui()
         self._load_settings_into_ui()
@@ -96,13 +96,6 @@ class MainWindow(QMainWindow):
 
         self.input_dir_edit = QLineEdit()
         self.input_dir_edit.setReadOnly(True)
-        btn_input = QPushButton("Eingabeordner")
-        btn_input.clicked.connect(self.select_input_dir)
-
-        self.output_dir_edit = QLineEdit()
-        self.output_dir_edit.setReadOnly(True)
-        btn_output = QPushButton("Ausgabeordner")
-        btn_output.clicked.connect(self.select_output_dir)
 
         self.stamp_width_spin = QDoubleSpinBox()
         self.stamp_width_spin.setRange(1.0, 500.0)
@@ -141,68 +134,34 @@ class MainWindow(QMainWindow):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["all", "first", "last"])
 
+        self.advanced_values = {
+            "grid_step_mm": self.settings.grid_step_mm,
+            "render_dpi": self.settings.render_dpi,
+            "whiteness_threshold": self.settings.whiteness_threshold,
+            "max_occupancy_ratio": self.settings.max_occupancy_ratio,
+            "dilation_px": self.settings.dilation_px,
+            "allow_scale_down_to": self.settings.allow_scale_down_to,
+            "process_mode": self.settings.process_mode,
+        }
+
         btn_run = QPushButton("Stapelverarbeitung starten")
         btn_run.clicked.connect(self.run_batch)
+        btn_select_input = QPushButton("Datei auswählen oder Ordner auswählen")
+        btn_select_input.clicked.connect(self.select_input_path)
+        btn_settings = QPushButton("Einstellungen")
+        btn_settings.clicked.connect(self.open_settings_dialog)
 
-        step_label = self._label_with_info(
-            "Raster-Schritt",
-            "Abstand zwischen geprüften Kandidat-Positionen. Kleiner = genauer, aber langsamer.",
-        )
-        dpi_label = self._label_with_info(
-            "Render-DPI",
-            "Auflösung für die Seitendarstellung zur Freiflächenanalyse. Höher = präziser, aber langsamer/speicherintensiver.",
-        )
-        scale_label = self._label_with_info(
-            "Min. Skalierung",
-            "Wenn kein Platz gefunden wird, wird der Stempel schrittweise bis zu diesem Faktor verkleinert.",
-        )
-        occ_label = self._label_with_info(
-            "Max. Belegungsquote",
-            "Maximal erlaubter Anteil belegter Pixel im Zielrechteck. Kleiner = strenger bei Überlappungen.",
-        )
-        dilation_label = self._label_with_info(
-            "Dilation",
-            "Erweitert erkannte belegte Bereiche um Sicherheitsabstand (in Pixeln). Höher = konservativer.",
-        )
-        threshold_label = self._label_with_info(
-            "Weiß-Schwelle",
-            "Pixel heller als dieser Wert gelten als freie Fläche. Niedriger = strenger, höher = toleranter.",
-        )
-
-        layout.addWidget(QLabel("Eingabeordner"), 0, 0)
+        layout.addWidget(QLabel("Eingabe"), 0, 0)
         layout.addWidget(self.input_dir_edit, 0, 1)
-        layout.addWidget(btn_input, 0, 2)
-
-        layout.addWidget(QLabel("Ausgabeordner"), 1, 0)
-        layout.addWidget(self.output_dir_edit, 1, 1)
-        layout.addWidget(btn_output, 1, 2)
+        layout.addWidget(btn_select_input, 0, 2)
 
         layout.addWidget(QLabel("Stempelbreite"), 2, 0)
         layout.addWidget(self.stamp_width_spin, 2, 1)
         layout.addWidget(QLabel("Stempelhöhe"), 3, 0)
         layout.addWidget(self.stamp_height_spin, 3, 1)
 
-        advanced_group = QGroupBox("Einstellungen")
-        advanced_group.setCheckable(True)
-        advanced_group.setChecked(False)
-        advanced_layout = QGridLayout(advanced_group)
-        advanced_layout.addWidget(step_label, 0, 0)
-        advanced_layout.addWidget(self.grid_step_spin, 0, 1)
-        advanced_layout.addWidget(dpi_label, 1, 0)
-        advanced_layout.addWidget(self.dpi_spin, 1, 1)
-        advanced_layout.addWidget(threshold_label, 2, 0)
-        advanced_layout.addWidget(self.threshold_spin, 2, 1)
-        advanced_layout.addWidget(occ_label, 3, 0)
-        advanced_layout.addWidget(self.max_occ_spin, 3, 1)
-        advanced_layout.addWidget(dilation_label, 4, 0)
-        advanced_layout.addWidget(self.dilation_spin, 4, 1)
-        advanced_layout.addWidget(scale_label, 5, 0)
-        advanced_layout.addWidget(self.scale_down_spin, 5, 1)
-        advanced_layout.addWidget(QLabel("Seitenmodus"), 6, 0)
-        advanced_layout.addWidget(self.mode_combo, 6, 1)
-
-        layout.addWidget(advanced_group, 4, 0, 1, 3)
-        layout.addWidget(btn_run, 5, 0, 1, 3)
+        layout.addWidget(btn_settings, 3, 2)
+        layout.addWidget(btn_run, 4, 0, 1, 3)
 
         return group
 
@@ -223,25 +182,19 @@ class MainWindow(QMainWindow):
         self.stamp_width_spin.setValue(s.stamp_width_mm)
         self.stamp_height_spin.setValue(s.stamp_height_mm)
         self.grid_step_spin.setValue(s.grid_step_mm)
-        self.dpi_spin.setValue(s.render_dpi)
-        self.threshold_spin.setValue(s.whiteness_threshold)
-        self.max_occ_spin.setValue(s.max_occupancy_ratio)
-        self.dilation_spin.setValue(s.dilation_px)
-        self.scale_down_spin.setValue(s.allow_scale_down_to)
-        self.mode_combo.setCurrentText(s.process_mode)
 
     def _collect_settings(self) -> PlacementSettings:
         s = PlacementSettings(
             stamp_width_mm=self.stamp_width_spin.value(),
             stamp_height_mm=self.stamp_height_spin.value(),
-            grid_step_mm=self.grid_step_spin.value(),
+            grid_step_mm=float(self.advanced_values["grid_step_mm"]),
             page_margin_mm=self.settings.page_margin_mm,
-            render_dpi=self.dpi_spin.value(),
-            whiteness_threshold=self.threshold_spin.value(),
-            max_occupancy_ratio=self.max_occ_spin.value(),
-            dilation_px=self.dilation_spin.value(),
-            allow_scale_down_to=self.scale_down_spin.value(),
-            process_mode=self.mode_combo.currentText(),
+            render_dpi=int(self.advanced_values["render_dpi"]),
+            whiteness_threshold=int(self.advanced_values["whiteness_threshold"]),
+            max_occupancy_ratio=float(self.advanced_values["max_occupancy_ratio"]),
+            dilation_px=int(self.advanced_values["dilation_px"]),
+            allow_scale_down_to=float(self.advanced_values["allow_scale_down_to"]),
+            process_mode=str(self.advanced_values["process_mode"]),
         )
         save_settings(s)
         return s
@@ -314,17 +267,19 @@ class MainWindow(QMainWindow):
         self._apply_stamp_size_defaults(self.filled_stamp_pdf_path)
         self.log(f"Stempel-PDF erzeugt: {target_file}")
 
-    def select_input_dir(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Eingabeordner wählen")
+    def select_input_path(self) -> None:
+        file_name, _ = QFileDialog.getOpenFileName(self, "Datei auswählen", "", "PDF (*.pdf)")
+        if file_name:
+            path = Path(file_name)
+            self.selected_input_file = path
+            self.input_dir_path = path.parent
+            self.input_dir_edit.setText(str(path))
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Ordner auswählen")
         if folder:
+            self.selected_input_file = None
             self.input_dir_path = Path(folder)
             self.input_dir_edit.setText(folder)
-
-    def select_output_dir(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Ausgabeordner wählen")
-        if folder:
-            self.output_dir_path = Path(folder)
-            self.output_dir_edit.setText(folder)
 
     def run_batch(self) -> None:
         if self.filled_stamp_pdf_path is None:
@@ -332,22 +287,29 @@ class MainWindow(QMainWindow):
             if self.filled_stamp_pdf_path is None:
                 QMessageBox.warning(self, "Hinweis", "Stempel-PDF konnte nicht automatisch erzeugt werden.")
                 return
-        if self.input_dir_path is None or self.output_dir_path is None:
-            QMessageBox.warning(self, "Hinweis", "Bitte Eingabe- und Ausgabeordner wählen.")
+        if self.input_dir_path is None:
+            QMessageBox.warning(self, "Hinweis", "Bitte Datei oder Ordner auswählen.")
             return
 
         settings = self._collect_settings()
+        output_dir = self.input_dir_path / "gestempelt"
         config = BatchJobConfig(
             input_dir=self.input_dir_path,
-            output_dir=self.output_dir_path,
+            output_dir=output_dir,
             stamp_pdf=self.filled_stamp_pdf_path,
             settings=settings,
+            output_suffix="",
         )
         processor = BatchProcessor(config)
 
         self.log("Stapelverarbeitung gestartet...")
         self.progress_bar.setValue(0)
-        results = processor.process_all(progress_callback=self._on_batch_progress)
+        if self.selected_input_file is not None:
+            file_result = processor.process_file(self.selected_input_file)
+            results = [file_result]
+            self._on_batch_progress(1, 1, self.selected_input_file, file_result)
+        else:
+            results = processor.process_all(progress_callback=self._on_batch_progress)
         if not results:
             self.log("Keine PDF-Dateien im Eingabeordner gefunden.")
             self.progress_bar.setValue(0)
@@ -427,3 +389,59 @@ class MainWindow(QMainWindow):
         temp_root = Path(tempfile.gettempdir()) / "pdf_stamper"
         ensure_dir(temp_root)
         return temp_root / "stamp_filled.pdf"
+
+    def open_settings_dialog(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Einstellungen")
+        layout = QFormLayout(dlg)
+
+        grid_step = QDoubleSpinBox()
+        grid_step.setRange(1.0, 100.0)
+        grid_step.setSuffix(" mm")
+        grid_step.setValue(float(self.advanced_values["grid_step_mm"]))
+        dpi = QSpinBox()
+        dpi.setRange(72, 600)
+        dpi.setValue(int(self.advanced_values["render_dpi"]))
+        threshold = QSpinBox()
+        threshold.setRange(0, 255)
+        threshold.setValue(int(self.advanced_values["whiteness_threshold"]))
+        max_occ = QDoubleSpinBox()
+        max_occ.setRange(0.0, 1.0)
+        max_occ.setSingleStep(0.01)
+        max_occ.setDecimals(3)
+        max_occ.setValue(float(self.advanced_values["max_occupancy_ratio"]))
+        dilation = QSpinBox()
+        dilation.setRange(0, 20)
+        dilation.setValue(int(self.advanced_values["dilation_px"]))
+        scale = QDoubleSpinBox()
+        scale.setRange(0.1, 1.0)
+        scale.setSingleStep(0.05)
+        scale.setDecimals(2)
+        scale.setValue(float(self.advanced_values["allow_scale_down_to"]))
+        mode = QComboBox()
+        mode.addItems(["all", "first", "last"])
+        mode.setCurrentText(str(self.advanced_values["process_mode"]))
+
+        layout.addRow("Raster-Schritt (kleiner = genauer, langsamer)", grid_step)
+        layout.addRow("Render-DPI (höher = präziser, langsamer)", dpi)
+        layout.addRow("Weiß-Schwelle (höher = mehr als frei erkannt)", threshold)
+        layout.addRow("Max. Belegungsquote (kleiner = strenger)", max_occ)
+        layout.addRow("Dilation (Sicherheitsabstand in Pixeln)", dilation)
+        layout.addRow("Min. Skalierung (bei Platzmangel)", scale)
+        layout.addRow("Seitenmodus", mode)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addRow(buttons)
+
+        if dlg.exec():
+            self.advanced_values = {
+                "grid_step_mm": grid_step.value(),
+                "render_dpi": dpi.value(),
+                "whiteness_threshold": threshold.value(),
+                "max_occupancy_ratio": max_occ.value(),
+                "dilation_px": dilation.value(),
+                "allow_scale_down_to": scale.value(),
+                "process_mode": mode.currentText(),
+            }
