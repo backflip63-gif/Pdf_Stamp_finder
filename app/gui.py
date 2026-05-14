@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 from typing import Dict
 
+import fitz
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -27,6 +28,9 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
+    QGraphicsView,
 )
 
 from .batch_processor import BatchProcessor
@@ -331,6 +335,8 @@ class MainWindow(QMainWindow):
                 success_count += 1
                 self.log(f"OK: {file_result.input_file.name}")
                 for pr in file_result.page_results:
+                    if pr.status in {"no_position", "manual_required"}:
+                        self._open_manual_review_popup(file_result.input_file, pr.page_index, pr.note)
                     if pr.status == "no_position":
                         no_position_count += 1
                     if pr.scale < 0.999:
@@ -453,3 +459,49 @@ class MainWindow(QMainWindow):
                 "allow_scale_down_to": scale.value(),
                 "process_mode": mode.currentText(),
             }
+
+    def _open_manual_review_popup(self, pdf_path: Path, page_index: int, note: str) -> None:
+        try:
+            doc = fitz.open(pdf_path)
+            try:
+                page = doc[page_index]
+                pix = page.get_pixmap(dpi=150, alpha=False)
+            finally:
+                doc.close()
+        except Exception as exc:
+            self.log(f"Hinweis: Vorschau konnte nicht geöffnet werden: {exc}")
+            return
+
+        from PySide6.QtGui import QImage, QPixmap
+
+        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+        qpix = QPixmap.fromImage(img)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Manuelle Prüfung: {pdf_path.name} - Seite {page_index + 1}")
+        dlg.resize(1200, 900)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel(note or "Manuelle Prüfung erforderlich."))
+
+        controls = QHBoxLayout()
+        btn_minus = QPushButton("Zoom -")
+        btn_plus = QPushButton("Zoom +")
+        controls.addWidget(btn_minus)
+        controls.addWidget(btn_plus)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem(qpix)
+        scene.addItem(item)
+        view = QGraphicsView(scene)
+        view.setDragMode(QGraphicsView.ScrollHandDrag)
+        view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        layout.addWidget(view, stretch=1)
+
+        def zoom(factor: float) -> None:
+            view.scale(factor, factor)
+
+        btn_plus.clicked.connect(lambda: zoom(1.25))
+        btn_minus.clicked.connect(lambda: zoom(0.8))
+        dlg.exec()

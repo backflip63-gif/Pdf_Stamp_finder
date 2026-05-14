@@ -57,6 +57,19 @@ class BatchProcessor:
                 pages_to_process = self._page_indices(len(doc))
                 for page_index in pages_to_process:
                     page = doc[page_index]
+                    rotation = int(page.rotation) % 360
+                    if rotation != 0:
+                        result.page_results.append(
+                            PlacementResult(
+                                page_index=page_index,
+                                rect=None,
+                                scale=1.0,
+                                occupancy_ratio=1.0,
+                                status="manual_required",
+                                note=f"Seite hat Rotation {rotation}°. Bitte manuell prüfen/platzieren.",
+                            )
+                        )
+                        continue
                     analysis = self.analyzer.analyze(page)
                     cand = self.placer.find_position(
                         page,
