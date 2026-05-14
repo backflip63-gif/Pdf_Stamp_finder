@@ -86,8 +86,9 @@ class StampPlacer:
 
     def _score(self, page: fitz.Page, rect: fitz.Rect, occ: float) -> float:
         anchor_x, anchor_y = self._target_bottom_right_visible(page.rect, int(page.rotation))
-        # Der relevante Stempel-Eckpunkt für die sichtbar unten-rechte Ecke je Rotation.
-        stamp_x, stamp_y = self._stamp_corner_for_rotation(rect, int(page.rotation))
+        # Der relevante Eckpunkt des Stempels in diesem Koordinatensystem.
+        stamp_x = rect.x1
+        stamp_y = rect.y0
         anchor_distance = ((stamp_x - anchor_x) ** 2 + (stamp_y - anchor_y) ** 2) ** 0.5
         return occ * 1000.0 + anchor_distance * 0.08
 
@@ -104,15 +105,3 @@ class StampPlacer:
         if rot == 270:
             return (0.0, 0.0)
         return (w, 0.0)
-
-    def _stamp_corner_for_rotation(self, rect: fitz.Rect, rotation: int) -> tuple[float, float]:
-        rot = rotation % 360
-        if rot == 0:
-            return (rect.x1, rect.y0)
-        if rot == 90:
-            return (rect.x1, rect.y1)
-        if rot == 180:
-            return (rect.x0, rect.y1)
-        if rot == 270:
-            return (rect.x0, rect.y0)
-        return (rect.x1, rect.y0)
