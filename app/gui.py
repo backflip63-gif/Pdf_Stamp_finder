@@ -638,7 +638,7 @@ class ManualPdfEditorDialog(QDialog):
         self.pdf_doc.load(str(source_pdf))
         self.pdf_view = QPdfView(self)
         self.pdf_view.setDocument(self.pdf_doc)
-        self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+        self.pdf_view.setPageMode(QPdfView.PageMode.SinglePage)
         self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
         self.pdf_view.pageNavigator().jump(page_index, QPointF(), 0)
         self.pdf_view.viewport().installEventFilter(self)
@@ -696,14 +696,25 @@ class ManualPdfEditorDialog(QDialog):
             return
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888).copy()
         qpix = QPixmap.fromImage(img)
+        page_w, page_h = self._current_page_size_pt()
+        if page_w <= 0 or page_h <= 0:
+            return
+        page_rect = self._page_display_rect(page_w, page_h)
+        stamp_w_pt, stamp_h_pt = stamp_doc[0].rect.width, stamp_doc[0].rect.height
+        scale = page_rect.width() / page_w
+        stamp_w_px = max(12, int(stamp_w_pt * scale))
+        stamp_h_px = max(12, int(stamp_h_pt * scale))
+        scaled = qpix.scaled(stamp_w_px, stamp_h_px, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
         self.stamp_label = QLabel(self.pdf_view.viewport())
-        self.stamp_label.setPixmap(qpix)
+        self.stamp_label.setPixmap(scaled)
         self.stamp_label.setWindowOpacity(0.85)
         self.stamp_label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.stamp_label.resize(qpix.size())
-        self.stamp_size_px = (qpix.width(), qpix.height())
-        vp = self.pdf_view.viewport().rect()
-        self.stamp_label.move(max(0, (vp.width() - qpix.width()) // 2), max(0, (vp.height() - qpix.height()) // 2))
+        self.stamp_label.resize(scaled.size())
+        self.stamp_size_px = (scaled.width(), scaled.height())
+        cx = int(page_rect.center().x() - scaled.width() * 0.5)
+        cy = int(page_rect.center().y() - scaled.height() * 0.5)
+        self.stamp_label.move(cx, cy)
         self.stamp_label.show()
 
     def _save_stamp_at_click(self) -> None:
@@ -716,11 +727,13 @@ class ManualPdfEditorDialog(QDialog):
             try:
                 page = out_doc[self.page_index]
                 sw, sh = stamp_doc[0].rect.width, stamp_doc[0].rect.height
-                vp = self.pdf_view.viewport().rect()
+                page_rect = self._page_display_rect(page.rect.width, page.rect.height)
                 center_x = self.stamp_label.x() + self.stamp_label.width() * 0.5
                 center_y = self.stamp_label.y() + self.stamp_label.height() * 0.5
-                rx = center_x / max(1.0, vp.width())
-                ry = center_y / max(1.0, vp.height())
+                rx = (center_x - page_rect.left()) / max(1.0, page_rect.width())
+                ry = (center_y - page_rect.top()) / max(1.0, page_rect.height())
+                rx = max(0.0, min(1.0, rx))
+                ry = max(0.0, min(1.0, ry))
                 w, h = page.rect.width, page.rect.height
                 x0 = max(0.0, min(w - sw, rx * w - sw * 0.5))
                 y0 = max(0.0, min(h - sh, ry * h - sh * 0.5))
@@ -736,3 +749,27 @@ class ManualPdfEditorDialog(QDialog):
             QMessageBox.information(self, "Gespeichert", "Stempel wurde im Ziel-PDF gespeichert.")
         except Exception as exc:
             QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{exc}")
+
+    def _current_page_size_pt(self) -> tuple[float, float]:
+        try:
+            doc = fitz.open(self.source_pdf)
+            try:
+                rect = doc[self.page_index].rect
+                return rect.width, rect.height
+            finally:
+                doc.close()
+        except Exception:
+            return (0.0, 0.0)
+
+    def _page_display_rect(self, page_w: float, page_h: float) -> QRectF:
+        vp = self.pdf_view.viewport().rect()
+        if page_w <= 0 or page_h <= 0:
+            return QRectF(vp)
+        # Für SinglePage + FitToWidth entspricht die Seitenbreite der Viewport-Breite.
+        disp_w = float(vp.width())
+        disp_h = disp_w * (page_h / page_w)
+        x = 0.0
+        y = 0.0
+        if disp_h < vp.height():
+            y = (vp.height() - disp_h) * 0.5
+        return QRectF(x, y, disp_w, disp_h)
