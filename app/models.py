@@ -54,3 +54,4 @@ class FileProcessResult:
     page_results: List[PlacementResult] = field(default_factory=list)
     success: bool = False
     error: str = ""
+    skipped: bool = False

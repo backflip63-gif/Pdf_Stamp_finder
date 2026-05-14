@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import shutil
+import subprocess
 import tempfile
 from typing import Dict
 
@@ -357,26 +360,41 @@ class MainWindow(QMainWindow):
             else:
                 self.log(f"FEHLER: {file_result.input_file.name}: {file_result.error}")
 
+        unstamped_dir = self.input_dir_path / "nicht_gestempelt"
+        ensure_dir(unstamped_dir)
+        unstamped_files: list[Path] = []
+        for file_result in results:
+            has_blocked = any(pr.status in {"no_position", "manual_required"} for pr in file_result.page_results)
+            if has_blocked or getattr(file_result, "skipped", False):
+                dst = unstamped_dir / file_result.input_file.name
+                shutil.copy2(file_result.input_file, dst)
+                unstamped_files.append(dst)
+                self.log(f"WARNUNG: Nicht gestempelt kopiert -> {dst.name}")
+
         self.log(
             "Zusammenfassung: "
             f"{success_count}/{len(results)} Dateien erfolgreich, "
             f"{no_position_count} Seiten ohne freie Position, "
             f"{reduced_count} Platzierungen mit Skalierungsreduktion."
         )
+        if unstamped_files:
+            self.log(f"Warnung: {len(unstamped_files)} PDF(s) konnten nicht gestempelt werden und liegen in: {unstamped_dir}")
         self.log(f"Fertig. {success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
         self.progress_bar.setValue(100)
         QMessageBox.information(self, "Fertig", f"{success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
 
-        if manual_tasks:
-            total_manual = len(manual_tasks)
-            QMessageBox.information(
-                self,
-                "Manuelle Platzierung erforderlich",
-                f"{total_manual} Seite(n) konnten nicht automatisch platziert werden.\n"
-                "Jetzt wird nacheinander der PDF-Editor geöffnet.",
-            )
-            for idx, (src, dst, page_idx, note) in enumerate(manual_tasks, start=1):
-                self._open_pdf_editor(src, dst, page_idx, note, idx, total_manual)
+        if unstamped_files:
+            self._open_unstamped_files(unstamped_files)
+
+    def _open_unstamped_files(self, files: list[Path]) -> None:
+        for file_path in files:
+            try:
+                if os.name == "nt":
+                    os.startfile(str(file_path))  # type: ignore[attr-defined]
+                elif os.name == "posix":
+                    subprocess.Popen(["xdg-open", str(file_path)])
+            except Exception as exc:
+                self.log(f"Hinweis: Datei konnte nicht automatisch geöffnet werden ({file_path.name}): {exc}")
 
     def log(self, message: str) -> None:
         self.log_edit.append(message)

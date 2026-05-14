@@ -55,6 +55,7 @@ class BatchProcessor:
             doc = fitz.open(pdf_path)
             try:
                 pages_to_process = self._page_indices(len(doc))
+                blocked = False
                 for page_index in pages_to_process:
                     page = doc[page_index]
                     rotation = int(page.rotation) % 360
@@ -69,6 +70,7 @@ class BatchProcessor:
                                 note=f"Seite hat Rotation {rotation}°. Bitte manuell prüfen/platzieren.",
                             )
                         )
+                        blocked = True
                         continue
                     analysis = self.analyzer.analyze(page)
                     cand = self.placer.find_position(
@@ -89,6 +91,7 @@ class BatchProcessor:
                                 note="Keine ausreichend freie Fläche gefunden.",
                             )
                         )
+                        blocked = True
                         continue
 
                     place_stamp_pdf(page, stamp_source, cand.rect)
@@ -103,8 +106,13 @@ class BatchProcessor:
                         )
                     )
 
-                doc.save(output_file, garbage=4, deflate=True)
-                result.success = True
+                if blocked:
+                    result.success = False
+                    result.skipped = True
+                    result.output_file = None
+                else:
+                    doc.save(output_file, garbage=4, deflate=True)
+                    result.success = True
             finally:
                 doc.close()
                 stamp_doc.close()
