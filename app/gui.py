@@ -5,6 +5,8 @@ import tempfile
 from typing import Dict
 
 import fitz
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -336,7 +338,12 @@ class MainWindow(QMainWindow):
                 self.log(f"OK: {file_result.input_file.name}")
                 for pr in file_result.page_results:
                     if pr.status in {"no_position", "manual_required"}:
-                        self._open_manual_review_popup(file_result.input_file, pr.page_index, pr.note)
+                        self._open_manual_review_popup(
+                            file_result.input_file,
+                            file_result.output_file or file_result.input_file,
+                            pr.page_index,
+                            pr.note,
+                        )
                     if pr.status == "no_position":
                         no_position_count += 1
                     if pr.scale < 0.999:
@@ -460,25 +467,26 @@ class MainWindow(QMainWindow):
                 "process_mode": mode.currentText(),
             }
 
-    def _open_manual_review_popup(self, pdf_path: Path, page_index: int, note: str) -> None:
+    def _open_manual_review_popup(self, source_pdf: Path, target_pdf: Path, page_index: int, note: str) -> None:
+        render_dpi = 150
+        render_zoom = render_dpi / 72.0
         try:
-            doc = fitz.open(pdf_path)
+            doc = fitz.open(source_pdf)
             try:
                 page = doc[page_index]
-                pix = page.get_pixmap(dpi=150, alpha=False)
+                pix = page.get_pixmap(dpi=render_dpi, alpha=False)
             finally:
                 doc.close()
         except Exception as exc:
             self.log(f"Hinweis: Vorschau konnte nicht geöffnet werden: {exc}")
             return
 
-        from PySide6.QtGui import QImage, QPixmap
-
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
         qpix = QPixmap.fromImage(img)
+        stamp_pixmap = self._load_stamp_preview_pixmap()
 
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Manuelle Prüfung: {pdf_path.name} - Seite {page_index + 1}")
+        dlg.setWindowTitle(f"Manuelle Prüfung: {source_pdf.name} - Seite {page_index + 1}")
         dlg.resize(1200, 900)
         layout = QVBoxLayout(dlg)
         layout.addWidget(QLabel(note or "Manuelle Prüfung erforderlich."))
@@ -486,8 +494,10 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout()
         btn_minus = QPushButton("Zoom -")
         btn_plus = QPushButton("Zoom +")
+        btn_save = QPushButton("Manuelle Position speichern")
         controls.addWidget(btn_minus)
         controls.addWidget(btn_plus)
+        controls.addWidget(btn_save)
         controls.addStretch(1)
         layout.addLayout(controls)
 
@@ -498,10 +508,67 @@ class MainWindow(QMainWindow):
         view.setDragMode(QGraphicsView.ScrollHandDrag)
         view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         layout.addWidget(view, stretch=1)
+        view.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+
+        stamp_item: QGraphicsPixmapItem | None = None
+        if stamp_pixmap is not None:
+            stamp_item = QGraphicsPixmapItem(stamp_pixmap)
+            stamp_item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
+            stamp_item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
+            stamp_item.setOpacity(0.85)
+            scene.addItem(stamp_item)
+            stamp_item.setPos(
+                scene.sceneRect().right() - stamp_item.boundingRect().width() - 30,
+                scene.sceneRect().bottom() - stamp_item.boundingRect().height() - 30,
+            )
 
         def zoom(factor: float) -> None:
             view.scale(factor, factor)
 
         btn_plus.clicked.connect(lambda: zoom(1.25))
         btn_minus.clicked.connect(lambda: zoom(0.8))
+
+        def save_manual_position() -> None:
+            if stamp_item is None or self.filled_stamp_pdf_path is None:
+                return
+            stamp_rect_px = stamp_item.sceneBoundingRect()
+            rect_pt = fitz.Rect(
+                stamp_rect_px.left() / render_zoom,
+                stamp_rect_px.top() / render_zoom,
+                stamp_rect_px.right() / render_zoom,
+                stamp_rect_px.bottom() / render_zoom,
+            )
+            try:
+                out_doc = fitz.open(target_pdf)
+                stamp_doc = fitz.open(self.filled_stamp_pdf_path)
+                try:
+                    target_page = out_doc[page_index]
+                    stamp_src = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
+                    annot = target_page.add_stamp_annot(rect_pt, stamp=stamp_src)
+                    annot.update()
+                    out_doc.save(target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+                finally:
+                    stamp_doc.close()
+                    out_doc.close()
+                self.log(f"Manuell gespeichert: {target_pdf.name}, Seite {page_index + 1}")
+                QMessageBox.information(dlg, "Gespeichert", "Manuelle Stempelposition wurde gespeichert.")
+            except Exception as exc:
+                QMessageBox.critical(dlg, "Fehler", f"Manuelle Position konnte nicht gespeichert werden:\n{exc}")
+
+        btn_save.clicked.connect(save_manual_position)
         dlg.exec()
+
+    def _load_stamp_preview_pixmap(self) -> QPixmap | None:
+        if self.filled_stamp_pdf_path is None:
+            return None
+        try:
+            stamp_doc = fitz.open(self.filled_stamp_pdf_path)
+            try:
+                pix = stamp_doc[0].get_pixmap(dpi=150, alpha=True)
+            finally:
+                stamp_doc.close()
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888).copy()
+            return QPixmap.fromImage(img)
+        except Exception as exc:
+            self.log(f"Hinweis: Stempelvorschau konnte nicht geladen werden: {exc}")
+            return None
