@@ -655,6 +655,8 @@ class ManualPdfEditorDialog(QDialog):
         self.page_index = page_index
         self.stamp_label: QLabel | None = None
         self.stamp_size_px: tuple[int, int] = (0, 0)
+        self.stamp_size_pt: tuple[float, float] = (0.0, 0.0)
+        self.stamp_center_ratio: tuple[float, float] | None = None
         self.drag_active = False
         self.drag_offset = QPointF(0.0, 0.0)
 
@@ -690,8 +692,8 @@ class ManualPdfEditorDialog(QDialog):
         self.pdf_view.viewport().installEventFilter(self)
         root.addWidget(self.pdf_view, stretch=1)
 
-        self.btn_zoom_in.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() * 1.2))
-        self.btn_zoom_out.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() / 1.2))
+        self.btn_zoom_in.clicked.connect(lambda: self._set_zoom(self.pdf_view.zoomFactor() * 1.2))
+        self.btn_zoom_out.clicked.connect(lambda: self._set_zoom(self.pdf_view.zoomFactor() / 1.2))
         self.btn_insert.clicked.connect(self._insert_stamp_center)
         self.btn_place.clicked.connect(self._save_stamp_at_click)
 
@@ -705,6 +707,7 @@ class ManualPdfEditorDialog(QDialog):
                     factor = 1.15 if delta > 0 else 0.87
                     self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
                     self.pdf_view.setZoomFactor(max(0.1, min(8.0, self.pdf_view.zoomFactor() * factor)))
+                    self._refresh_stamp_overlay()
                     return True
             if etype == 2 and self.stamp_label is not None:  # MouseButtonPress
                 local = event.position()
@@ -720,6 +723,7 @@ class ManualPdfEditorDialog(QDialog):
                 nx = max(0, min(vp.width() - self.stamp_label.width(), nx))
                 ny = max(0, min(vp.height() - self.stamp_label.height(), ny))
                 self.stamp_label.move(nx, ny)
+                self._update_stamp_ratio_from_overlay()
                 return True
             if etype == 3 and self.drag_active:  # MouseButtonRelease
                 self.drag_active = False
@@ -754,13 +758,16 @@ class ManualPdfEditorDialog(QDialog):
 
         self.stamp_label = QLabel(self.pdf_view.viewport())
         self.stamp_label.setPixmap(scaled)
+        self.stamp_label.setScaledContents(True)
         self.stamp_label.setWindowOpacity(0.85)
         self.stamp_label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.stamp_label.resize(scaled.size())
         self.stamp_size_px = (scaled.width(), scaled.height())
+        self.stamp_size_pt = (stamp_w_pt, stamp_h_pt)
         cx = int(page_rect.center().x() - scaled.width() * 0.5)
         cy = int(page_rect.center().y() - scaled.height() * 0.5)
         self.stamp_label.move(cx, cy)
+        self._update_stamp_ratio_from_overlay()
         self.stamp_label.show()
 
     def _save_stamp_at_click(self) -> None:
@@ -773,11 +780,9 @@ class ManualPdfEditorDialog(QDialog):
             try:
                 page = out_doc[self.page_index]
                 sw, sh = stamp_doc[0].rect.width, stamp_doc[0].rect.height
-                page_rect = self._page_display_rect(page.rect.width, page.rect.height)
-                center_x = self.stamp_label.x() + self.stamp_label.width() * 0.5
-                center_y = self.stamp_label.y() + self.stamp_label.height() * 0.5
-                rx = (center_x - page_rect.left()) / max(1.0, page_rect.width())
-                ry = (center_y - page_rect.top()) / max(1.0, page_rect.height())
+                if self.stamp_center_ratio is None:
+                    self._update_stamp_ratio_from_overlay()
+                rx, ry = self.stamp_center_ratio or (0.5, 0.5)
                 rx = max(0.0, min(1.0, rx))
                 ry = max(0.0, min(1.0, ry))
                 # Klickposition liegt im sichtbaren (rotierten) Koordinatensystem.
@@ -788,10 +793,7 @@ class ManualPdfEditorDialog(QDialog):
                 x0 = center_pdf.x - sw * 0.5
                 y0 = center_pdf.y - sh * 0.5
                 rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh) & page.mediabox
-                pix = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
-                annot = page.add_stamp_annot(rect, stamp=pix)
-                annot.set_rotation(int(page.rotation) % 360)
-                annot.update()
+                page.show_pdf_page(rect, stamp_doc, 0, overlay=True)
                 out_doc.save(self.target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
             finally:
                 stamp_doc.close()
@@ -834,3 +836,36 @@ class ManualPdfEditorDialog(QDialog):
         if disp_h < vp.height():
             y = (vp.height() - disp_h) * 0.5
         return QRectF(x, y, disp_w, disp_h)
+
+    def _set_zoom(self, value: float) -> None:
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
+        self.pdf_view.setZoomFactor(max(0.1, min(8.0, value)))
+        self._refresh_stamp_overlay()
+
+    def _update_stamp_ratio_from_overlay(self) -> None:
+        if self.stamp_label is None:
+            return
+        page_w, page_h = self._current_page_size_pt()
+        page_rect = self._page_display_rect(page_w, page_h)
+        center_x = self.stamp_label.x() + self.stamp_label.width() * 0.5
+        center_y = self.stamp_label.y() + self.stamp_label.height() * 0.5
+        rx = (center_x - page_rect.left()) / max(1.0, page_rect.width())
+        ry = (center_y - page_rect.top()) / max(1.0, page_rect.height())
+        self.stamp_center_ratio = (max(0.0, min(1.0, rx)), max(0.0, min(1.0, ry)))
+
+    def _refresh_stamp_overlay(self) -> None:
+        if self.stamp_label is None or self.stamp_center_ratio is None:
+            return
+        page_w, page_h = self._current_page_size_pt()
+        page_rect = self._page_display_rect(page_w, page_h)
+        if page_w <= 0:
+            return
+        scale = page_rect.width() / page_w
+        w_px = max(12, int(self.stamp_size_pt[0] * scale))
+        h_px = max(12, int(self.stamp_size_pt[1] * scale))
+        if self.stamp_label.pixmap() is not None:
+            self.stamp_label.resize(w_px, h_px)
+        rx, ry = self.stamp_center_ratio
+        cx = page_rect.left() + rx * page_rect.width()
+        cy = page_rect.top() + ry * page_rect.height()
+        self.stamp_label.move(int(cx - w_px * 0.5), int(cy - h_px * 0.5))
