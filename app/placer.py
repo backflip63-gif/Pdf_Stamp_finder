@@ -44,7 +44,7 @@ class StampPlacer:
                 if occ > self.settings.max_occupancy_ratio:
                     continue
 
-                score = self._score(page.rect, rect, occ)
+                score = self._score(page, rect, occ)
                 cand = Candidate(rect=rect, occupancy_ratio=occ, score=score, scale=scale)
                 if best is None or cand.score < best.score:
                     best = cand
@@ -84,16 +84,17 @@ class StampPlacer:
             return 1.0
         return float(area.mean())
 
-    def _score(self, page_rect: fitz.Rect, rect: fitz.Rect, occ: float) -> float:
-        anchor_x, anchor_y = self._anchor_target(page_rect, self.settings.preferred_anchor)
+    def _score(self, page: fitz.Page, rect: fitz.Rect, occ: float) -> float:
+        anchor_x, anchor_y = self._anchor_target(page.rect, self.settings.preferred_anchor, int(page.rotation))
         cx = (rect.x0 + rect.x1) * 0.5
         cy = (rect.y0 + rect.y1) * 0.5
         anchor_distance = ((cx - anchor_x) ** 2 + (cy - anchor_y) ** 2) ** 0.5
         return occ * 1000.0 + anchor_distance * 0.08
 
-    def _anchor_target(self, page_rect: fitz.Rect, anchor: str) -> tuple[float, float]:
+    def _anchor_target(self, page_rect: fitz.Rect, anchor: str, rotation: int) -> tuple[float, float]:
         w = page_rect.width
         h = page_rect.height
+        mapped_anchor = self._anchor_for_rotation(anchor, rotation)
         targets = {
             "top_left": (0.0, 0.0),
             "top_right": (w, 0.0),
@@ -101,5 +102,38 @@ class StampPlacer:
             "bottom_right": (w, h),
             "bottom_center": (w * 0.5, h),
             "right_center": (w, h * 0.5),
+            "top_center": (w * 0.5, 0.0),
+            "left_center": (0.0, h * 0.5),
         }
-        return targets.get(anchor, targets["bottom_right"])
+        return targets.get(mapped_anchor, targets["bottom_right"])
+
+    def _anchor_for_rotation(self, anchor: str, rotation: int) -> str:
+        rot = rotation % 360
+        if rot == 0:
+            return anchor
+        mapping_90 = {
+            "top_left": "bottom_left",
+            "top_right": "top_left",
+            "bottom_right": "top_right",
+            "bottom_left": "bottom_right",
+            "bottom_center": "right_center",
+            "right_center": "top_center",
+        }
+        mapping_180 = {
+            "top_left": "bottom_right",
+            "top_right": "bottom_left",
+            "bottom_right": "top_left",
+            "bottom_left": "top_right",
+            "bottom_center": "top_center",
+            "right_center": "left_center",
+        }
+        mapping_270 = {
+            "top_left": "top_right",
+            "top_right": "bottom_right",
+            "bottom_right": "bottom_left",
+            "bottom_left": "top_left",
+            "bottom_center": "left_center",
+            "right_center": "bottom_center",
+        }
+        table = {90: mapping_90, 180: mapping_180, 270: mapping_270}.get(rot, {})
+        return table.get(anchor, anchor)

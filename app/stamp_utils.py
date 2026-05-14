@@ -25,6 +25,10 @@ def place_stamp_pdf(page: fitz.Page, stamp_source: Any, rect: fitz.Rect) -> None
     # Stempel explizit als PDF-Annotation anlegen (nicht einbetten).
     # Für ein benutzerdefiniertes Aussehen wird ein Bild/Pixmap als Appearance verwendet.
     annot = page.add_stamp_annot(rect, stamp=stamp_source)
+    try:
+        annot.set_rotation(int(page.rotation) % 360)
+    except Exception:
+        pass
     annot.set_info(
         title="PDF-Stamper",
         content="Stempel wurde automatisch platziert.",
