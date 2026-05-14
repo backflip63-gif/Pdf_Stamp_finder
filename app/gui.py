@@ -5,8 +5,10 @@ import tempfile
 from typing import Dict
 
 import fitz
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtPdf import QPdfDocument
+from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -496,10 +498,12 @@ class MainWindow(QMainWindow):
         btn_plus = QPushButton("Zoom +")
         btn_place = QPushButton("Stempel manuell platzieren")
         btn_save = QPushButton("Manuelle Position speichern")
+        btn_editor = QPushButton("Im PDF-Editor öffnen")
         controls.addWidget(btn_minus)
         controls.addWidget(btn_plus)
         controls.addWidget(btn_place)
         controls.addWidget(btn_save)
+        controls.addWidget(btn_editor)
         controls.addStretch(1)
         layout.addLayout(controls)
 
@@ -578,6 +582,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(dlg, "Fehler", f"Manuelle Position konnte nicht gespeichert werden:\n{exc}")
 
         btn_save.clicked.connect(save_manual_position)
+        btn_editor.clicked.connect(lambda: self._open_pdf_editor(source_pdf, target_pdf, page_index))
         dlg.exec()
 
     def _load_stamp_preview_pixmap(self) -> QPixmap | None:
@@ -594,3 +599,92 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.log(f"Hinweis: Stempelvorschau konnte nicht geladen werden: {exc}")
             return None
+
+    def _open_pdf_editor(self, source_pdf: Path, target_pdf: Path, page_index: int) -> None:
+        editor = ManualPdfEditorDialog(self, source_pdf, target_pdf, self.filled_stamp_pdf_path, page_index)
+        editor.exec()
+
+
+class ManualPdfEditorDialog(QDialog):
+    def __init__(self, parent: QWidget, source_pdf: Path, target_pdf: Path, stamp_pdf: Path | None, page_index: int) -> None:
+        super().__init__(parent)
+        self.source_pdf = source_pdf
+        self.target_pdf = target_pdf
+        self.stamp_pdf = stamp_pdf
+        self.page_index = page_index
+        self.last_click_ratio: tuple[float, float] | None = None
+
+        self.setWindowTitle(f"PDF-Editor: {source_pdf.name}")
+        self.resize(1400, 950)
+
+        root = QVBoxLayout(self)
+        ctrl = QHBoxLayout()
+        self.btn_zoom_out = QPushButton("Zoom -")
+        self.btn_zoom_in = QPushButton("Zoom +")
+        self.btn_place = QPushButton("Stempel an Klickposition speichern")
+        self.info = QLabel("Mit Strg+Mausrad zoomen, normal scrollen.")
+        ctrl.addWidget(self.btn_zoom_out)
+        ctrl.addWidget(self.btn_zoom_in)
+        ctrl.addWidget(self.btn_place)
+        ctrl.addWidget(self.info)
+        ctrl.addStretch(1)
+        root.addLayout(ctrl)
+
+        self.pdf_doc = QPdfDocument(self)
+        self.pdf_doc.load(str(source_pdf))
+        self.pdf_view = QPdfView(self)
+        self.pdf_view.setDocument(self.pdf_doc)
+        self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        self.pdf_view.pageNavigator().jump(page_index, QPointF(), 0)
+        self.pdf_view.viewport().installEventFilter(self)
+        root.addWidget(self.pdf_view, stretch=1)
+
+        self.btn_zoom_in.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() * 1.2))
+        self.btn_zoom_out.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() / 1.2))
+        self.btn_place.clicked.connect(self._save_stamp_at_click)
+
+    def eventFilter(self, obj: object, event: object) -> bool:
+        if obj is self.pdf_view.viewport():
+            etype = getattr(event, "type", lambda: None)()
+            if etype == 31:  # Wheel
+                mods = event.modifiers()
+                if mods & Qt.ControlModifier:
+                    delta = event.angleDelta().y()
+                    factor = 1.15 if delta > 0 else 0.87
+                    self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
+                    self.pdf_view.setZoomFactor(max(0.1, min(8.0, self.pdf_view.zoomFactor() * factor)))
+                    return True
+            if etype == 2:  # MouseButtonPress
+                px = event.position().x()
+                py = event.position().y()
+                vp = self.pdf_view.viewport().rect()
+                self.last_click_ratio = (max(0.0, min(1.0, px / max(1, vp.width()))), max(0.0, min(1.0, py / max(1, vp.height()))))
+        return super().eventFilter(obj, event)
+
+    def _save_stamp_at_click(self) -> None:
+        if self.stamp_pdf is None or self.last_click_ratio is None:
+            QMessageBox.warning(self, "Hinweis", "Bitte zuerst in die Seite klicken.")
+            return
+        try:
+            out_doc = fitz.open(self.target_pdf)
+            stamp_doc = fitz.open(self.stamp_pdf)
+            try:
+                page = out_doc[self.page_index]
+                w, h = page.rect.width, page.rect.height
+                rx, ry = self.last_click_ratio
+                sw, sh = stamp_doc[0].rect.width, stamp_doc[0].rect.height
+                x0 = max(0.0, min(w - sw, rx * w - sw * 0.5))
+                y0 = max(0.0, min(h - sh, ry * h - sh * 0.5))
+                rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh)
+                pix = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
+                annot = page.add_stamp_annot(rect, stamp=pix)
+                annot.set_rotation(int(page.rotation) % 360)
+                annot.update()
+                out_doc.save(self.target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+            finally:
+                stamp_doc.close()
+                out_doc.close()
+            QMessageBox.information(self, "Gespeichert", "Stempel wurde im Ziel-PDF gespeichert.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{exc}")
