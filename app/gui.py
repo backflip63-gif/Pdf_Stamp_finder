@@ -734,10 +734,14 @@ class ManualPdfEditorDialog(QDialog):
                 ry = (center_y - page_rect.top()) / max(1.0, page_rect.height())
                 rx = max(0.0, min(1.0, rx))
                 ry = max(0.0, min(1.0, ry))
-                w, h = page.rect.width, page.rect.height
-                x0 = max(0.0, min(w - sw, rx * w - sw * 0.5))
-                y0 = max(0.0, min(h - sh, ry * h - sh * 0.5))
-                rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh)
+                # Klickposition liegt im sichtbaren (rotierten) Koordinatensystem.
+                # Für das Speichern transformieren wir in das PDF-Basissystem zurück.
+                vis_w, vis_h = page.rect.width, page.rect.height
+                center_rot = fitz.Point(rx * vis_w, ry * vis_h)
+                center_pdf = center_rot * page.derotation_matrix
+                x0 = center_pdf.x - sw * 0.5
+                y0 = center_pdf.y - sh * 0.5
+                rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh) & page.mediabox
                 pix = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
                 annot = page.add_stamp_annot(rect, stamp=pix)
                 annot.set_rotation(int(page.rotation) % 360)
