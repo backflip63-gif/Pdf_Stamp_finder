@@ -340,11 +340,10 @@ class MainWindow(QMainWindow):
                 self.log(f"OK: {file_result.input_file.name}")
                 for pr in file_result.page_results:
                     if pr.status in {"no_position", "manual_required"}:
-                        self._open_manual_review_popup(
+                        self._open_pdf_editor(
                             file_result.input_file,
                             file_result.output_file or file_result.input_file,
                             pr.page_index,
-                            pr.note,
                         )
                     if pr.status == "no_position":
                         no_position_count += 1
@@ -612,7 +611,7 @@ class ManualPdfEditorDialog(QDialog):
         self.target_pdf = target_pdf
         self.stamp_pdf = stamp_pdf
         self.page_index = page_index
-        self.last_click_ratio: tuple[float, float] | None = None
+        self.stamp_item: QGraphicsPixmapItem | None = None
 
         self.setWindowTitle(f"PDF-Editor: {source_pdf.name}")
         self.resize(1400, 950)
@@ -621,10 +620,12 @@ class ManualPdfEditorDialog(QDialog):
         ctrl = QHBoxLayout()
         self.btn_zoom_out = QPushButton("Zoom -")
         self.btn_zoom_in = QPushButton("Zoom +")
-        self.btn_place = QPushButton("Stempel an Klickposition speichern")
+        self.btn_insert = QPushButton("Stempel platzieren")
+        self.btn_place = QPushButton("Position speichern")
         self.info = QLabel("Mit Strg+Mausrad zoomen, normal scrollen.")
         ctrl.addWidget(self.btn_zoom_out)
         ctrl.addWidget(self.btn_zoom_in)
+        ctrl.addWidget(self.btn_insert)
         ctrl.addWidget(self.btn_place)
         ctrl.addWidget(self.info)
         ctrl.addStretch(1)
@@ -642,6 +643,7 @@ class ManualPdfEditorDialog(QDialog):
 
         self.btn_zoom_in.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() * 1.2))
         self.btn_zoom_out.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() / 1.2))
+        self.btn_insert.clicked.connect(self._insert_stamp_center)
         self.btn_place.clicked.connect(self._save_stamp_at_click)
 
     def eventFilter(self, obj: object, event: object) -> bool:
@@ -655,25 +657,53 @@ class ManualPdfEditorDialog(QDialog):
                     self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
                     self.pdf_view.setZoomFactor(max(0.1, min(8.0, self.pdf_view.zoomFactor() * factor)))
                     return True
-            if etype == 2:  # MouseButtonPress
-                px = event.position().x()
-                py = event.position().y()
-                vp = self.pdf_view.viewport().rect()
-                self.last_click_ratio = (max(0.0, min(1.0, px / max(1, vp.width()))), max(0.0, min(1.0, py / max(1, vp.height()))))
         return super().eventFilter(obj, event)
 
+    def _insert_stamp_center(self) -> None:
+        if self.stamp_pdf is None:
+            return
+        if self.stamp_item is not None:
+            return
+        try:
+            stamp_doc = fitz.open(self.stamp_pdf)
+            try:
+                pix = stamp_doc[0].get_pixmap(dpi=150, alpha=True)
+            finally:
+                stamp_doc.close()
+        except Exception as exc:
+            QMessageBox.critical(self, "Fehler", f"Stempel konnte nicht geladen werden:\n{exc}")
+            return
+        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888).copy()
+        qpix = QPixmap.fromImage(img)
+        scene = self.pdf_view.scene()
+        if scene is None:
+            return
+        self.stamp_item = QGraphicsPixmapItem(qpix)
+        self.stamp_item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
+        self.stamp_item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
+        self.stamp_item.setOpacity(0.85)
+        scene.addItem(self.stamp_item)
+        center = scene.sceneRect().center()
+        self.stamp_item.setPos(center.x() - qpix.width() * 0.5, center.y() - qpix.height() * 0.5)
+
     def _save_stamp_at_click(self) -> None:
-        if self.stamp_pdf is None or self.last_click_ratio is None:
-            QMessageBox.warning(self, "Hinweis", "Bitte zuerst in die Seite klicken.")
+        if self.stamp_pdf is None or self.stamp_item is None:
+            QMessageBox.warning(self, "Hinweis", "Bitte zuerst 'Stempel platzieren' klicken.")
             return
         try:
             out_doc = fitz.open(self.target_pdf)
             stamp_doc = fitz.open(self.stamp_pdf)
             try:
                 page = out_doc[self.page_index]
-                w, h = page.rect.width, page.rect.height
-                rx, ry = self.last_click_ratio
                 sw, sh = stamp_doc[0].rect.width, stamp_doc[0].rect.height
+                scene = self.pdf_view.scene()
+                if scene is None:
+                    return
+                scene_rect = scene.sceneRect()
+                stamp_rect = self.stamp_item.sceneBoundingRect()
+                rx = (stamp_rect.center().x() - scene_rect.left()) / max(1.0, scene_rect.width())
+                ry = (stamp_rect.center().y() - scene_rect.top()) / max(1.0, scene_rect.height())
+                w, h = page.rect.width, page.rect.height
                 x0 = max(0.0, min(w - sw, rx * w - sw * 0.5))
                 y0 = max(0.0, min(h - sh, ry * h - sh * 0.5))
                 rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh)
