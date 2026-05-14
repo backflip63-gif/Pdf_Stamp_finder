@@ -688,6 +688,7 @@ class ManualPdfEditorDialog(QDialog):
         try:
             stamp_doc = fitz.open(self.stamp_pdf)
             try:
+                stamp_w_pt, stamp_h_pt = stamp_doc[0].rect.width, stamp_doc[0].rect.height
                 pix = stamp_doc[0].get_pixmap(dpi=150, alpha=True)
             finally:
                 stamp_doc.close()
@@ -700,7 +701,6 @@ class ManualPdfEditorDialog(QDialog):
         if page_w <= 0 or page_h <= 0:
             return
         page_rect = self._page_display_rect(page_w, page_h)
-        stamp_w_pt, stamp_h_pt = stamp_doc[0].rect.width, stamp_doc[0].rect.height
         scale = page_rect.width() / page_w
         stamp_w_px = max(12, int(stamp_w_pt * scale))
         stamp_h_px = max(12, int(stamp_h_pt * scale))
