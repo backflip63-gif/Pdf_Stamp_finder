@@ -661,7 +661,8 @@ class ManualPdfEditorDialog(QDialog):
         self.drag_offset = QPointF(0.0, 0.0)
 
         self.setWindowTitle(f"PDF-Editor: {source_pdf.name}")
-        self.showMaximized()
+        self.resize(1800, 1200)
+        self.setWindowState(Qt.WindowMaximized)
 
         root = QVBoxLayout(self)
         ctrl = QHBoxLayout()
