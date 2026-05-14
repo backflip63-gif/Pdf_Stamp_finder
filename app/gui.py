@@ -783,8 +783,8 @@ class ManualPdfEditorDialog(QDialog):
                 center_pdf = center_rot * page.derotation_matrix
                 x0 = center_pdf.x - sw * 0.5
                 y0 = center_pdf.y - sh * 0.5
-                rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh) & page.mediabox
-                page.show_pdf_page(rect, stamp_doc, 0, overlay=True)
+                rect = fitz.Rect(x0, y0, x0 + sw, y0 + sh)
+                page.show_pdf_page(rect, stamp_doc, 0, overlay=True, rotate=int(page.rotation) % 360)
                 out_doc.save(self.target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
             finally:
                 stamp_doc.close()
