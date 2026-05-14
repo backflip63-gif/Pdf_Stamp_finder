@@ -6,7 +6,7 @@ from typing import Dict
 
 import fitz
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -468,7 +468,7 @@ class MainWindow(QMainWindow):
             }
 
     def _open_manual_review_popup(self, source_pdf: Path, target_pdf: Path, page_index: int, note: str) -> None:
-        render_dpi = 150
+        render_dpi = 220
         render_zoom = render_dpi / 72.0
         try:
             doc = fitz.open(source_pdf)
@@ -494,9 +494,11 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout()
         btn_minus = QPushButton("Zoom -")
         btn_plus = QPushButton("Zoom +")
+        btn_place = QPushButton("Stempel manuell platzieren")
         btn_save = QPushButton("Manuelle Position speichern")
         controls.addWidget(btn_minus)
         controls.addWidget(btn_plus)
+        controls.addWidget(btn_place)
         controls.addWidget(btn_save)
         controls.addStretch(1)
         layout.addLayout(controls)
@@ -507,32 +509,47 @@ class MainWindow(QMainWindow):
         view = QGraphicsView(scene)
         view.setDragMode(QGraphicsView.ScrollHandDrag)
         view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        view.setRenderHint(QPainter.SmoothPixmapTransform, True)
         layout.addWidget(view, stretch=1)
         view.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
 
         stamp_item: QGraphicsPixmapItem | None = None
-        if stamp_pixmap is not None:
-            stamp_item = QGraphicsPixmapItem(stamp_pixmap)
-            stamp_item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
-            stamp_item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
-            stamp_item.setOpacity(0.85)
-            scene.addItem(stamp_item)
-            stamp_item.setPos(
-                scene.sceneRect().right() - stamp_item.boundingRect().width() - 30,
-                scene.sceneRect().bottom() - stamp_item.boundingRect().height() - 30,
-            )
+        place_mode = {"active": False}
 
         def zoom(factor: float) -> None:
             view.scale(factor, factor)
 
         btn_plus.clicked.connect(lambda: zoom(1.25))
         btn_minus.clicked.connect(lambda: zoom(0.8))
+        btn_place.clicked.connect(lambda: place_mode.update({"active": True}))
+
+        original_mouse_press = view.mousePressEvent
+
+        def mouse_press(event) -> None:  # type: ignore[no-untyped-def]
+            nonlocal stamp_item
+            if place_mode["active"] and stamp_pixmap is not None and event.button() == Qt.LeftButton:
+                scene_pos = view.mapToScene(event.pos())
+                if stamp_item is None:
+                    stamp_item = QGraphicsPixmapItem(stamp_pixmap)
+                    stamp_item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
+                    stamp_item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
+                    stamp_item.setOpacity(0.85)
+                    scene.addItem(stamp_item)
+                stamp_item.setPos(
+                    scene_pos.x() - stamp_item.boundingRect().width() * 0.5,
+                    scene_pos.y() - stamp_item.boundingRect().height() * 0.5,
+                )
+                place_mode["active"] = False
+                return
+            original_mouse_press(event)
+
+        view.mousePressEvent = mouse_press  # type: ignore[assignment]
 
         def save_manual_position() -> None:
             if stamp_item is None or self.filled_stamp_pdf_path is None:
                 return
             stamp_rect_px = stamp_item.sceneBoundingRect()
-            rect_pt = fitz.Rect(
+            rect_rot = fitz.Rect(
                 stamp_rect_px.left() / render_zoom,
                 stamp_rect_px.top() / render_zoom,
                 stamp_rect_px.right() / render_zoom,
@@ -543,8 +560,13 @@ class MainWindow(QMainWindow):
                 stamp_doc = fitz.open(self.filled_stamp_pdf_path)
                 try:
                     target_page = out_doc[page_index]
+                    derot = target_page.derotation_matrix
+                    p0 = fitz.Point(rect_rot.x0, rect_rot.y0) * derot
+                    p1 = fitz.Point(rect_rot.x1, rect_rot.y1) * derot
+                    rect_pt = fitz.Rect(min(p0.x, p1.x), min(p0.y, p1.y), max(p0.x, p1.x), max(p0.y, p1.y))
                     stamp_src = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
                     annot = target_page.add_stamp_annot(rect_pt, stamp=stamp_src)
+                    annot.set_rotation(int(target_page.rotation) % 360)
                     annot.update()
                     out_doc.save(target_pdf, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
                 finally:
