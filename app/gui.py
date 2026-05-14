@@ -334,16 +334,20 @@ class MainWindow(QMainWindow):
         success_count = 0
         reduced_count = 0
         no_position_count = 0
+        manual_tasks: list[tuple[Path, Path, int, str]] = []
         for file_result in results:
             if file_result.success:
                 success_count += 1
                 self.log(f"OK: {file_result.input_file.name}")
                 for pr in file_result.page_results:
                     if pr.status in {"no_position", "manual_required"}:
-                        self._open_pdf_editor(
-                            file_result.input_file,
-                            file_result.output_file or file_result.input_file,
-                            pr.page_index,
+                        manual_tasks.append(
+                            (
+                                file_result.input_file,
+                                file_result.output_file or file_result.input_file,
+                                pr.page_index,
+                                pr.note,
+                            )
                         )
                     if pr.status == "no_position":
                         no_position_count += 1
@@ -362,6 +366,17 @@ class MainWindow(QMainWindow):
         self.log(f"Fertig. {success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
         self.progress_bar.setValue(100)
         QMessageBox.information(self, "Fertig", f"{success_count}/{len(results)} Dateien erfolgreich verarbeitet.")
+
+        if manual_tasks:
+            total_manual = len(manual_tasks)
+            QMessageBox.information(
+                self,
+                "Manuelle Platzierung erforderlich",
+                f"{total_manual} Seite(n) konnten nicht automatisch platziert werden.\n"
+                "Jetzt wird nacheinander der PDF-Editor geöffnet.",
+            )
+            for idx, (src, dst, page_idx, note) in enumerate(manual_tasks, start=1):
+                self._open_pdf_editor(src, dst, page_idx, note, idx, total_manual)
 
     def log(self, message: str) -> None:
         self.log_edit.append(message)
@@ -599,13 +614,40 @@ class MainWindow(QMainWindow):
             self.log(f"Hinweis: Stempelvorschau konnte nicht geladen werden: {exc}")
             return None
 
-    def _open_pdf_editor(self, source_pdf: Path, target_pdf: Path, page_index: int) -> None:
-        editor = ManualPdfEditorDialog(self, source_pdf, target_pdf, self.filled_stamp_pdf_path, page_index)
+    def _open_pdf_editor(
+        self,
+        source_pdf: Path,
+        target_pdf: Path,
+        page_index: int,
+        note: str,
+        queue_index: int,
+        queue_total: int,
+    ) -> None:
+        editor = ManualPdfEditorDialog(
+            self,
+            source_pdf,
+            target_pdf,
+            self.filled_stamp_pdf_path,
+            page_index,
+            note,
+            queue_index,
+            queue_total,
+        )
         editor.exec()
 
 
 class ManualPdfEditorDialog(QDialog):
-    def __init__(self, parent: QWidget, source_pdf: Path, target_pdf: Path, stamp_pdf: Path | None, page_index: int) -> None:
+    def __init__(
+        self,
+        parent: QWidget,
+        source_pdf: Path,
+        target_pdf: Path,
+        stamp_pdf: Path | None,
+        page_index: int,
+        note: str,
+        queue_index: int,
+        queue_total: int,
+    ) -> None:
         super().__init__(parent)
         self.source_pdf = source_pdf
         self.target_pdf = target_pdf
@@ -633,6 +675,10 @@ class ManualPdfEditorDialog(QDialog):
         ctrl.addWidget(self.info)
         ctrl.addStretch(1)
         root.addLayout(ctrl)
+        self.lbl_status = QLabel(
+            f"Seite {page_index + 1} | Manuell {queue_index}/{queue_total} | {note or 'Manuelle Platzierung erforderlich.'}"
+        )
+        root.addWidget(self.lbl_status)
 
         self.pdf_doc = QPdfDocument(self)
         self.pdf_doc.load(str(source_pdf))
@@ -751,6 +797,7 @@ class ManualPdfEditorDialog(QDialog):
                 stamp_doc.close()
                 out_doc.close()
             QMessageBox.information(self, "Gespeichert", "Stempel wurde im Ziel-PDF gespeichert.")
+            self.accept()
         except Exception as exc:
             QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{exc}")
 
