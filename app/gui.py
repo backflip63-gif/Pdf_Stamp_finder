@@ -611,7 +611,10 @@ class ManualPdfEditorDialog(QDialog):
         self.target_pdf = target_pdf
         self.stamp_pdf = stamp_pdf
         self.page_index = page_index
-        self.stamp_item: QGraphicsPixmapItem | None = None
+        self.stamp_label: QLabel | None = None
+        self.stamp_size_px: tuple[int, int] = (0, 0)
+        self.drag_active = False
+        self.drag_offset = QPointF(0.0, 0.0)
 
         self.setWindowTitle(f"PDF-Editor: {source_pdf.name}")
         self.resize(1400, 950)
@@ -657,12 +660,30 @@ class ManualPdfEditorDialog(QDialog):
                     self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
                     self.pdf_view.setZoomFactor(max(0.1, min(8.0, self.pdf_view.zoomFactor() * factor)))
                     return True
+            if etype == 2 and self.stamp_label is not None:  # MouseButtonPress
+                local = event.position()
+                if self.stamp_label.geometry().contains(int(local.x()), int(local.y())):
+                    self.drag_active = True
+                    self.drag_offset = QPointF(local.x() - self.stamp_label.x(), local.y() - self.stamp_label.y())
+                    return True
+            if etype == 5 and self.drag_active and self.stamp_label is not None:  # MouseMove
+                local = event.position()
+                nx = int(local.x() - self.drag_offset.x())
+                ny = int(local.y() - self.drag_offset.y())
+                vp = self.pdf_view.viewport().rect()
+                nx = max(0, min(vp.width() - self.stamp_label.width(), nx))
+                ny = max(0, min(vp.height() - self.stamp_label.height(), ny))
+                self.stamp_label.move(nx, ny)
+                return True
+            if etype == 3 and self.drag_active:  # MouseButtonRelease
+                self.drag_active = False
+                return True
         return super().eventFilter(obj, event)
 
     def _insert_stamp_center(self) -> None:
         if self.stamp_pdf is None:
             return
-        if self.stamp_item is not None:
+        if self.stamp_label is not None:
             return
         try:
             stamp_doc = fitz.open(self.stamp_pdf)
@@ -675,19 +696,18 @@ class ManualPdfEditorDialog(QDialog):
             return
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888).copy()
         qpix = QPixmap.fromImage(img)
-        scene = self.pdf_view.scene()
-        if scene is None:
-            return
-        self.stamp_item = QGraphicsPixmapItem(qpix)
-        self.stamp_item.setFlag(QGraphicsPixmapItem.ItemIsMovable, True)
-        self.stamp_item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
-        self.stamp_item.setOpacity(0.85)
-        scene.addItem(self.stamp_item)
-        center = scene.sceneRect().center()
-        self.stamp_item.setPos(center.x() - qpix.width() * 0.5, center.y() - qpix.height() * 0.5)
+        self.stamp_label = QLabel(self.pdf_view.viewport())
+        self.stamp_label.setPixmap(qpix)
+        self.stamp_label.setWindowOpacity(0.85)
+        self.stamp_label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.stamp_label.resize(qpix.size())
+        self.stamp_size_px = (qpix.width(), qpix.height())
+        vp = self.pdf_view.viewport().rect()
+        self.stamp_label.move(max(0, (vp.width() - qpix.width()) // 2), max(0, (vp.height() - qpix.height()) // 2))
+        self.stamp_label.show()
 
     def _save_stamp_at_click(self) -> None:
-        if self.stamp_pdf is None or self.stamp_item is None:
+        if self.stamp_pdf is None or self.stamp_label is None:
             QMessageBox.warning(self, "Hinweis", "Bitte zuerst 'Stempel platzieren' klicken.")
             return
         try:
@@ -696,13 +716,11 @@ class ManualPdfEditorDialog(QDialog):
             try:
                 page = out_doc[self.page_index]
                 sw, sh = stamp_doc[0].rect.width, stamp_doc[0].rect.height
-                scene = self.pdf_view.scene()
-                if scene is None:
-                    return
-                scene_rect = scene.sceneRect()
-                stamp_rect = self.stamp_item.sceneBoundingRect()
-                rx = (stamp_rect.center().x() - scene_rect.left()) / max(1.0, scene_rect.width())
-                ry = (stamp_rect.center().y() - scene_rect.top()) / max(1.0, scene_rect.height())
+                vp = self.pdf_view.viewport().rect()
+                center_x = self.stamp_label.x() + self.stamp_label.width() * 0.5
+                center_y = self.stamp_label.y() + self.stamp_label.height() * 0.5
+                rx = center_x / max(1.0, vp.width())
+                ry = center_y / max(1.0, vp.height())
                 w, h = page.rect.width, page.rect.height
                 x0 = max(0.0, min(w - sw, rx * w - sw * 0.5))
                 y0 = max(0.0, min(h - sh, ry * h - sh * 0.5))
