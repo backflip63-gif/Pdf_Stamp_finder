@@ -9,7 +9,7 @@ from typing import Dict
 
 import fitz
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
@@ -38,6 +38,11 @@ from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
+    QListWidget,
+    QListWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QSplitter,
 )
 
 from .batch_processor import BatchProcessor
@@ -217,12 +222,40 @@ class MainWindow(QMainWindow):
         return s
 
     def select_template_pdf(self) -> None:
+        stamps_root = Path.cwd() / "stamps"
+        if stamps_root.exists():
+            dlg = StampSelectionDialog(self, stamps_root)
+            if dlg.exec():
+                selected = dlg.selected_pdf_path
+                if selected is None:
+                    return
+                selected_page = dlg.selected_page_index
+                prepared = self._prepare_selected_stamp_page(selected, selected_page)
+                self.template_pdf_path = prepared
+                self.template_path_edit.setText(f"{selected} (Seite {selected_page + 1})")
+                self.load_form_fields()
+                return
+
         file_name, _ = QFileDialog.getOpenFileName(self, "Formular-PDF wählen", "", "PDF (*.pdf)")
         if not file_name:
             return
         self.template_pdf_path = Path(file_name)
         self.template_path_edit.setText(file_name)
         self.load_form_fields()
+
+    def _prepare_selected_stamp_page(self, pdf_path: Path, page_index: int) -> Path:
+        if page_index <= 0:
+            return pdf_path
+        out_path = self._temp_stamp_output_path().with_name("stamp_selected_page.pdf")
+        src = fitz.open(pdf_path)
+        dst = fitz.open()
+        try:
+            dst.insert_pdf(src, from_page=page_index, to_page=page_index)
+            dst.save(out_path)
+        finally:
+            dst.close()
+            src.close()
+        return out_path
 
     def load_form_fields(self) -> None:
         if self.template_pdf_path is None:
@@ -663,6 +696,103 @@ class MainWindow(QMainWindow):
             queue_total,
         )
         editor.exec()
+
+
+class StampSelectionDialog(QDialog):
+    def __init__(self, parent: QWidget, stamps_root: Path) -> None:
+        super().__init__(parent)
+        self.stamps_root = stamps_root
+        self.selected_pdf_path: Path | None = None
+        self.selected_page_index: int = 0
+        self.setWindowTitle("Stempelpakete auswählen")
+        self.resize(1200, 750)
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(f"Stempelverzeichnis: {stamps_root}"))
+        splitter = QSplitter(Qt.Horizontal)
+        root.addWidget(splitter, stretch=1)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Stempelpakete / Dateien"])
+        splitter.addWidget(self.tree)
+
+        self.preview = QListWidget()
+        self.preview.setViewMode(QListWidget.IconMode)
+        self.preview.setResizeMode(QListWidget.Adjust)
+        self.preview.setIconSize(QPixmap(220, 220).size())
+        self.preview.setSpacing(12)
+        splitter.addWidget(self.preview)
+        splitter.setSizes([350, 850])
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        root.addWidget(buttons)
+        buttons.accepted.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+
+        self.tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
+        self.preview.itemDoubleClicked.connect(lambda _: self._accept_selection())
+        self._build_tree()
+
+    def _build_tree(self) -> None:
+        self.tree.clear()
+        root_item = QTreeWidgetItem([self.stamps_root.name])
+        root_item.setData(0, Qt.UserRole, str(self.stamps_root))
+        self.tree.addTopLevelItem(root_item)
+        self._add_dir_children(root_item, self.stamps_root)
+        root_item.setExpanded(True)
+
+    def _add_dir_children(self, parent_item: QTreeWidgetItem, directory: Path) -> None:
+        for sub in sorted([p for p in directory.iterdir() if p.is_dir()], key=lambda x: x.name.lower()):
+            d_item = QTreeWidgetItem([sub.name])
+            d_item.setData(0, Qt.UserRole, str(sub))
+            parent_item.addChild(d_item)
+            self._add_dir_children(d_item, sub)
+
+        for pdf in sorted(directory.glob("*.pdf"), key=lambda x: x.name.lower()):
+            p_item = QTreeWidgetItem([pdf.name])
+            p_item.setData(0, Qt.UserRole, str(pdf))
+            parent_item.addChild(p_item)
+
+    def _on_tree_selection_changed(self) -> None:
+        selected = self.tree.selectedItems()
+        if not selected:
+            return
+        path = Path(selected[0].data(0, Qt.UserRole))
+        if path.is_file() and path.suffix.lower() == ".pdf":
+            self._load_pdf_previews(path)
+        else:
+            self.preview.clear()
+
+    def _load_pdf_previews(self, pdf_path: Path) -> None:
+        self.preview.clear()
+        try:
+            doc = fitz.open(pdf_path)
+            try:
+                for page_idx in range(len(doc)):
+                    pix = doc[page_idx].get_pixmap(dpi=96, alpha=False)
+                    img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+                    pm = QPixmap.fromImage(img).scaled(220, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    item = QListWidgetItem(f"Seite {page_idx + 1}")
+                    item.setIcon(QIcon(pm))
+                    item.setData(Qt.UserRole, (str(pdf_path), page_idx))
+                    self.preview.addItem(item)
+            finally:
+                doc.close()
+        except Exception:
+            pass
+
+    def _accept_selection(self) -> None:
+        current = self.preview.currentItem()
+        if current is None:
+            QMessageBox.warning(self, "Hinweis", "Bitte eine Stempelseite auswählen.")
+            return
+        raw = current.data(Qt.UserRole)
+        if not raw:
+            return
+        pdf_path, page_idx = raw
+        self.selected_pdf_path = Path(pdf_path)
+        self.selected_page_index = int(page_idx)
+        self.accept()
 
 
 class ManualPdfEditorDialog(QDialog):
