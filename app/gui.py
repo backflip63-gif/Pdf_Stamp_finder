@@ -651,7 +651,7 @@ class MainWindow(QMainWindow):
                     p0 = fitz.Point(rect_rot.x0, rect_rot.y0) * derot
                     p1 = fitz.Point(rect_rot.x1, rect_rot.y1) * derot
                     rect_pt = fitz.Rect(min(p0.x, p1.x), min(p0.y, p1.y), max(p0.x, p1.x), max(p0.y, p1.y))
-                    stamp_src = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
+                    stamp_src = stamp_doc[0].get_pixmap(dpi=600, alpha=True)
                     annot = target_page.add_stamp_annot(rect_pt, stamp=stamp_src)
                     annot.set_rotation(int(target_page.rotation) % 360)
                     annot.update()
@@ -1001,7 +1001,7 @@ class ManualPdfEditorDialog(QDialog):
             for rec in self.annotation_items:
                 item = rec['item']
                 rect = fitz.Rect(item.pos().x()/s, item.pos().y()/s, (item.pos().x()+item.pixmap().width())/s, (item.pos().y()+item.pixmap().height())/s)
-                pix = stamp_doc[0].get_pixmap(dpi=300, alpha=True)
+                pix = stamp_doc[0].get_pixmap(dpi=600, alpha=True)
                 annot = page.add_stamp_annot(rect, stamp=pix)
                 annot.set_rotation(int(rec['rotation'])%360)
                 annot.update()
