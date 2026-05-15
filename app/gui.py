@@ -233,6 +233,7 @@ class MainWindow(QMainWindow):
                 prepared = self._prepare_selected_stamp_page(selected, selected_page)
                 self.template_pdf_path = prepared
                 self.template_path_edit.setText(f"{selected} (Seite {selected_page + 1})")
+                self._invalidate_generated_stamp()
                 self.load_form_fields()
                 return
 
@@ -241,7 +242,13 @@ class MainWindow(QMainWindow):
             return
         self.template_pdf_path = Path(file_name)
         self.template_path_edit.setText(file_name)
+        self._invalidate_generated_stamp()
         self.load_form_fields()
+
+    def _invalidate_generated_stamp(self) -> None:
+        self.filled_stamp_pdf_path = None
+        self.stamp_output_label.setText("Noch kein erzeugtes Stempel-PDF.")
+        self.log("Stempelvorlage gewechselt: Bitte Stempel-PDF neu erzeugen.")
 
     def _prepare_selected_stamp_page(self, pdf_path: Path, page_index: int) -> Path:
         if page_index <= 0:
